@@ -19,6 +19,9 @@
 # - Paul Nilsson, paul.nilsson@cern.ch, 2025
 
 import argparse
+import asyncio
+import google.generativeai as genai
+import json
 import logging
 import os
 import re
@@ -31,7 +34,12 @@ from agents.document_query_agent import DocumentQueryAgent
 from agents.log_analysis_agent import LogAnalysisAgent
 from agents.data_query_agent import TaskStatusAgent
 from tools.errorcodes import EC_TIMEOUT
-from tools.server_utils import MCP_SERVER_URL, check_server_health
+from tools.server_utils import MCP_SERVER_URL, check_server_health, call_mistral_direct
+
+# Configure Gemini API
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # mcp = FastMCP("panda") # Removed unused instance
 logging.basicConfig(
@@ -46,90 +54,187 @@ logger = logging.getLogger(__name__)
 
 
 class SelectionAgent:
-    def __init__(self, agents: dict, model: str, session_id: str = None) -> None:
+    def __init__(self, agents: dict, model: str, session_id: str = None, cache: str = "/app/cache") -> None:
         self.agents = agents  # dict like {"document": ..., "queue": ...}
         self.model = model        # e.g., OpenAI or Anthropic wrapper
         self.session_id = session_id  # Session ID for tracking conversation
+        self.cache = cache  # Cache directory for dynamic agent creation
 
     def classify_question(self, question: str) -> str:
-        prompt = f"""
-You are a routing assistant for a question-answering system. Your job is to classify a question into one of the following categories, based on its topic:
+        """
+        Enhanced classification with entity extraction and dynamic agent creation.
 
-- document: Questions about general usage, concepts, how-to guides, or explanation of systems (e.g. PanDA, prun, pathena, containers, error codes).
-- queue: Questions about site or queue data stored in a JSON file (e.g. corepower, copytool, status of a queue, which queues use rucio).
-- log_analyzer: Questions about why a specific job failed (e.g. log or failure analysis of job NNN). The word 'job', 'pandaid' or 'panda id' followed by
-an integer number must be present in the question.
-- task: Questions about a specific task's status or job counts (e.g. status of task NNN, number of failed jobs). The word 'task' followed by an integer
-number must be present.
-- pilot_activity: Questions about pilot activity, failures, or statistics, possibly involving Grafana (e.g. pilots running on queue X, pilots failing, links to
-Grafana).
+        Strategy:
+        1. Try regex extraction first (fast path for explicit task/job IDs)
+        2. If agents already exist from regex, use rule-based routing
+        3. Otherwise, use LLM with structured JSON output to extract IDs and classify
+        4. Dynamically create agents if LLM extracts IDs that regex missed
+        """
+        # Fast path: If we have a task or job agent already, use it directly
+        # This means regex extraction succeeded in figure_out_agents()
+        if self.agents.get("task") is not None:
+            return "task"
+        if self.agents.get("log_analyzer") is not None:
+            return "log_analyzer"
 
-Classify the following question:
+        # Fallback: Use LLM with structured output for entity extraction + classification
+        prompt = f"""Analyze this question and return ONLY a valid JSON object with entity extraction and classification.
 
-"{question}"
+Question: "{question}"
 
-Output only one of the categories: document, queue, task, log, or pilot.
+Return ONLY valid JSON in this exact format:
+{{
+    "category": "task|log_analyzer|document|queue|pilot_activity",
+    "task_id": null or integer,
+    "job_id": null or integer,
+    "confidence": "high|medium|low",
+    "reasoning": "brief explanation"
+}}
+
+Category Definitions:
+- task: Questions about specific PanDA task status, job counts, or task metadata
+- log_analyzer: Questions about why a specific job failed or log analysis
+- document: General usage questions, how-to guides, concepts (PanDA, prun, pathena, error codes)
+- queue: Questions about site/queue data (corepower, copytool, queue status, rucio usage)
+- pilot_activity: Questions about pilot activity, failures, statistics, or Grafana links
+
+Examples:
+
+Q: "What's happening with 47250094?"
+{{"category": "task", "task_id": 47250094, "job_id": null, "confidence": "high", "reasoning": "Numeric ID without context likely refers to task"}}
+
+Q: "Why did job 12345 crash?"
+{{"category": "log_analyzer", "task_id": null, "job_id": 12345, "confidence": "high", "reasoning": "Explicit job failure question with job ID"}}
+
+Q: "Tell me about 999888777"
+{{"category": "task", "task_id": 999888777, "job_id": null, "confidence": "medium", "reasoning": "Large number likely task ID but context unclear"}}
+
+Q: "How do I use pathena?"
+{{"category": "document", "task_id": null, "job_id": null, "confidence": "high", "reasoning": "General how-to question about tool usage"}}
+
+Q: "Which queues support multi-core jobs?"
+{{"category": "queue", "task_id": null, "job_id": null, "confidence": "high", "reasoning": "Question about queue capabilities"}}
+
+Now analyze: "{question}"
+
+Return ONLY the JSON object, nothing else.
 """
-        result = self.ask(prompt, returnstring=True).strip().lower()
-        return result if result in self.agents else "document"
+
+        try:
+            response = self.ask(prompt, returnstring=True).strip()
+
+            # Strip markdown code blocks if present
+            if response.startswith("```"):
+                response = re.sub(r"^```(?:json)?\n?|\n?```$", "", response.strip())
+
+            result = json.loads(response)
+            logger.info(f"LLM classification result: {result}")
+
+            # If LLM found a task_id and we don't have a task agent yet, create one dynamically
+            if result.get("task_id") and not self.agents.get("task"):
+                task_id = str(result["task_id"])
+                logger.info(f"Dynamically creating TaskStatusAgent for task {task_id}")
+                try:
+                    self.agents["task"] = TaskStatusAgent(
+                        self.model,
+                        task_id,
+                        self.cache,
+                        self.session_id
+                    )
+                    return "task"
+                except Exception as e:
+                    logger.error(f"Failed to create TaskStatusAgent: {e}")
+
+            # If LLM found a job_id and we don't have a log_analyzer agent yet, create one
+            if result.get("job_id") and not self.agents.get("log_analyzer"):
+                job_id = str(result["job_id"])
+                logger.info(f"Dynamically creating LogAnalysisAgent for job {job_id}")
+                try:
+                    self.agents["log_analyzer"] = LogAnalysisAgent(
+                        self.model,
+                        job_id,
+                        self.cache,
+                        self.session_id
+                    )
+                    return "log_analyzer"
+                except Exception as e:
+                    logger.error(f"Failed to create LogAnalysisAgent: {e}")
+
+            # Return the classified category
+            category = result.get("category", "document")
+            return category if category in ["task", "log_analyzer", "document", "queue", "pilot_activity"] else "document"
+
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"LLM returned invalid JSON or missing keys: {e}. Response: {response[:200]}")
+            # Fallback to simple text classification if JSON parsing fails
+            response_lower = response.lower()
+            if "task" in response_lower:
+                return "task" if self.agents.get("task") else "document"
+            elif "log" in response_lower or "job" in response_lower:
+                return "log_analyzer" if self.agents.get("log_analyzer") else "document"
+            elif "queue" in response_lower:
+                return "queue" if self.agents.get("queue") else "document"
+            elif "pilot" in response_lower:
+                return "pilot_activity" if self.agents.get("pilot_activity") else "document"
+            return "document"
 
     def answer(self, question: str) -> str:
         return self.classify_question(question)
 
     def ask(self, question: str, returnstring=False) -> str or dict:
         """
-        Send a question to the LLM via the MCP server and retrieve the answer.
+        Send a question to the LLM and retrieve the answer.
+        Calls Gemini directly to avoid HTTP deadlock when invoked during request handling.
 
         Args:
             question (str): The question to ask the LLM.
+            returnstring (bool): If True, return only the answer string. If False, return a dict.
 
         Returns:
             str or dict: The answer from the LLM, or a dictionary containing the session ID, if
             returnstring is False. If returnstring is True, returns the answer as a string.
         """
-        server_url = os.getenv("MCP_SERVER_URL", f"{MCP_SERVER_URL}/rag_ask")
-
-        # Construct prompt
-        prompt = question
-
+        # Call Gemini directly to avoid HTTP deadlock
         try:
-            response = requests.post(server_url, json={"question": prompt, "model": self.model}, timeout=30)
-            if response.ok:
-                try:
-                    # Store interaction
-                    _answer = response.json()["answer"]
-                    if returnstring:
-                        return _answer
-
-                    answer = {
-                        "session_id": self.session_id,
-                        "question": question,
-                        "model": self.model,
-                        "answer": _answer
-                    }
-                    return answer
-                except JSONDecodeError:  # Changed to use imported JSONDecodeError
-                    return "Error: Could not decode JSON response from server."
-                except KeyError:
-                    return "Error: 'answer' key missing in server response."
+            if self.model == "gemini":
+                gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
+                response = gemini_model.generate_content(question)
+                _answer = response.text
+            elif self.model == "mistral":
+                _answer = call_mistral_direct(question)
             else:
+                # For other models, fall back to HTTP (but this creates deadlock risk)
+                server_url = os.getenv("MCP_SERVER_URL", f"{MCP_SERVER_URL}/rag_ask")
+                response = requests.post(server_url, json={"question": question, "model": self.model}, timeout=30)
+                if not response.ok:
+                    error_msg = f"Error: Server returned status {response.status_code} - {response.text}"
+                    return error_msg if returnstring else {"session_id": self.session_id, "answer": error_msg}
+
                 try:
-                    # Attempt to parse JSON for detailed error message
-                    error_data = response.json()
-                    if isinstance(error_data, dict) and "detail" in error_data:
-                        return f"Error from server: {error_data['detail']}"
-                    # Fallback if "detail" key is not found or JSON is not a dict
-                    return f"Error: Server returned status {response.status_code} - {response.text}"
-                except JSONDecodeError:  # Changed to use imported JSONDecodeError
-                    # Fall through to the generic error message if JSON parsing fails
-                    pass
-                # Fallback if JSON parsing fails or "detail" is not in a dict
-                return f"Error: Server returned status {response.status_code} - {response.text}"
-        except requests.exceptions.RequestException as e:
-            return f"Error: Network issue or server unreachable - {e}"
+                    _answer = response.json()["answer"]
+                except (JSONDecodeError, KeyError) as e:
+                    error_msg = f"Error: Could not parse server response - {e}"
+                    return error_msg if returnstring else {"session_id": self.session_id, "answer": error_msg}
+
+            # Return answer in requested format
+            if returnstring:
+                return _answer
+
+            answer = {
+                "session_id": self.session_id,
+                "question": question,
+                "model": self.model,
+                "answer": _answer
+            }
+            return answer
+
+        except Exception as e:
+            error_msg = f"Error: {e}"
+            logger.error(f"Error in SelectionAgent.ask(): {e}")
+            return error_msg if returnstring else {"session_id": self.session_id, "answer": error_msg}
 
 
-def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid: str or None, cache: str) -> dict:
+def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid: str or None, cache: str, mcp_instance=None) -> dict:
     """
     Create and return a dictionary of agents for different categories.
 
@@ -139,17 +244,35 @@ def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid
         pandaid (str or None): The PanDA ID for the job or task, if applicable.
         taskid (str or None): The task ID for the job or task, if applicable.
         cache (str): The location of the cache directory.
+        mcp_instance: The PandaMCP instance.
 
     Returns:
         dict: A dictionary mapping agent categories to their respective agent classes.
     """
     return {
-        "document": DocumentQueryAgent(model, session_id),
+        "document": DocumentQueryAgent(model, session_id, mcp_instance),
         "queue": None,
         "task": TaskStatusAgent(model, taskid, cache, session_id) if session_id and taskid else None,
         "log_analyzer": LogAnalysisAgent(model, pandaid, cache, session_id) if pandaid else None,
         "pilot_activity": None
     }
+
+
+def _find_last_match(pattern: str, text: str) -> int or None:
+    """
+    Return the last integer captured by pattern in text, if any.
+    """
+    matches = re.findall(pattern, text, flags=re.IGNORECASE)
+    if not matches:
+        return None
+    # re.findall with capturing groups returns a list of tuples if multiple groups; guard for that
+    last = matches[-1]
+    if isinstance(last, tuple):
+        last = next((group for group in reversed(last) if group), None)
+    try:
+        return int(last) if last is not None else None
+    except ValueError:
+        return None
 
 
 def extract_job_id(text: str) -> int or None:
@@ -163,11 +286,7 @@ def extract_job_id(text: str) -> int or None:
         int or None: The extracted job ID as an integer, or None if no job ID is found.
     """
     pattern = r'\b(?:job|panda[\s_]?id)\s+(\d+)\b'
-    match = re.search(pattern, text, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
-
-    return None
+    return _find_last_match(pattern, text)
 
 
 def extract_task_id(text: str) -> int or None:
@@ -181,18 +300,25 @@ def extract_task_id(text: str) -> int or None:
         int or None: The extracted task ID as an integer, or None if no task ID is found.
     """
     pattern = r'\b(?:task[\s_]?id|task)\s+(\d+)\b'
-    match = re.search(pattern, text, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
+    task_id = _find_last_match(pattern, text)
+    if task_id is not None:
+        return task_id
 
-    return None
+    # fallback: bare numbers near end (e.g., "tell me 47250094"), but only when the question
+    # does not mention jobs/panda ids to avoid misrouting log queries.
+    if re.search(r'\b(job|panda[\s_]?id)\b', text, re.IGNORECASE):
+        return None
+
+    bare_pattern = r'(\d{6,})'
+    return _find_last_match(bare_pattern, text)
 
 
-def figure_out_agents(question: str, model: str, session_id: str, cache: str = None):
+def figure_out_agents(question: str, model: str, session_id: str, cache: str = None, mcp_instance=None):
     """
     Determine the appropriate agent to handle the given question.
     Args:
         question:
+        mcp_instance:
 
     Returns:
 
@@ -201,7 +327,7 @@ def figure_out_agents(question: str, model: str, session_id: str, cache: str = N
     # use a regex to extract "job NNNNN" from args.question
     pandaid = extract_job_id(question)
     taskid = extract_task_id(question)
-    return get_agents(model, session_id, pandaid, taskid, cache)
+    return get_agents(model, session_id, pandaid, taskid, cache, mcp_instance)
 
 
 def main() -> None:
@@ -260,14 +386,14 @@ def main() -> None:
         logger.info("No Task ID found in the question.")
 
     agents = get_agents(args.model, args.session_id, pandaid, taskid, args.cache)
-    selection_agent = SelectionAgent(agents, args.model)
+    selection_agent = SelectionAgent(agents, args.model, session_id=args.session_id, cache=args.cache)
 
     category = selection_agent.answer(args.question)
     agent = agents.get(category)
     logger.info(f"Selected agent category: {category}")
     if category == "document":
         logger.info(f"Selected agent category: {category} (DocumentQueryAgent)")
-        answer = agent.ask(args.question)
+        answer = asyncio.run(agent.ask(args.question))
         logger.info(f"Answer:\n{answer}")
         return answer
     elif category == "log_analyzer":

@@ -47,8 +47,8 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="Ask-PanDA Ollama Shim", version="0.1.0")
 
 ASK_PANDA_BASE_URL = os.getenv("ASK_PANDA_BASE_URL", "http://localhost:8000")
-# Use rag_ask for both endpoints - agent_ask has timeout issues with complex processing
-ASK_PANDA_AGENT_ENDPOINT = f"{ASK_PANDA_BASE_URL.rstrip('/')}/rag_ask"
+# Use agent_ask for chat endpoint to get proper task/job routing
+ASK_PANDA_AGENT_ENDPOINT = f"{ASK_PANDA_BASE_URL.rstrip('/')}/agent_ask"
 ASK_PANDA_RAG_ENDPOINT = f"{ASK_PANDA_BASE_URL.rstrip('/')}/rag_ask"
 
 OLLAMA_SHIM_MODEL = os.getenv("OLLAMA_SHIM_MODEL", "mistral")
@@ -106,7 +106,7 @@ def _extract_user_prompt(messages: List[Dict[str, Any]]) -> str:
 
 async def _call_ask_panda(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             logger.debug("Posting to %s with payload %s", endpoint, payload)
             response = await client.post(endpoint, json=payload)
             response.raise_for_status()

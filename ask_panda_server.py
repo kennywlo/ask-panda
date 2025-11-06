@@ -62,6 +62,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional  # For type hinting
 
+from agents.document_query_agent import DocumentQueryAgent
 from tools.tools import get_vectorstore_manager
 
 
@@ -156,7 +157,7 @@ class PandaMCP(FastMCP):
         """
         Use the official Mistral SDK for cleaner, more reliable API calls.
 
-        Model: mistral-large-latest
+        Model: mistral-small-latest
         Note: Requires appropriate API tier access. Can be changed to
               mistral-small-latest or open-mistral-7b for lower tiers.
         """
@@ -164,16 +165,18 @@ class PandaMCP(FastMCP):
         if not api_key:
             return "Error: MISTRAL_API_KEY not set in environment."
 
+        model_name = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+
         try:
             async with Mistral(api_key=api_key) as client:
                 res = await client.chat.complete_async(
-                    model="mistral-large-latest",
+                    model=model_name,
                     messages=[{"role": "user", "content": prompt}],
                     stream=False
                 )
                 return res.choices[0].message.content.strip()
         except Exception as e:
-            return f"Mistral SDK error: {str(e)}"
+            return f"Mistral SDK error (model={model_name}): {str(e)}"
 
     async def _call_anthropic(self, prompt: str) -> str:
         """
@@ -326,10 +329,23 @@ class PandaMCP(FastMCP):
                 "Please set the GEMINI_API_KEY environment variable."
             )
         try:
-            gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
+            # Extract system instruction if present in prompt
+            system_instruction = None
+            user_prompt = prompt
+            if prompt.startswith("You are AskPanDA"):
+                parts = prompt.split("\n\n", 1)
+                if len(parts) == 2:
+                    system_instruction = parts[0]
+                    user_prompt = parts[1]
+
+            gemini_model = genai.GenerativeModel(
+                "models/gemini-2.0-flash",
+                system_instruction=system_instruction
+            )
             response = await gemini_model.generate_content_async(
-                prompt
-            )  # Use generate_content_async
+                user_prompt,
+                request_options={"timeout": 60}
+            )  # Use generate_content_async with timeout
             return response.text.strip()
         except genai.types.BlockedPromptException as e:
             return f"Error interacting with Gemini API: Prompt was blocked - {e}"
@@ -339,11 +355,14 @@ class PandaMCP(FastMCP):
             genai.types.generation_types.BrokenResponseError
         ) as e:  # More specific error for broken responses
             return f"Error interacting with Gemini API: Broken response - {e}"
-        except (
-            genai.core.exceptions.GoogleAPIError
-        ) as e:  # Catching google.api_core.exceptions.GoogleAPIError
-            return f"Error interacting with Gemini API: Google API error - {e}"
         except Exception as e:
+            google_api_error = getattr(
+                getattr(getattr(genai, "core", None), "exceptions", None),
+                "GoogleAPIError",
+                None,
+            )
+            if google_api_error and isinstance(e, google_api_error):
+                return f"Error interacting with Gemini API: Google API error - {e}"
             return f"An unexpected error occurred with Gemini API: {e}"
 
     async def rag_query(self, question: str, model: str) -> str:
@@ -373,8 +392,9 @@ class PandaMCP(FastMCP):
         context_docs = vectorstore_manager.query(question, k=5)
         context = "\n\n".join(context_docs)
 
-        # Construct prompt explicitly
-        prompt = f"Answer based on the following context:\n{context}\n\nQuestion: {question}"
+        # Construct prompt explicitly with system identity
+        system_identity = "You are AskPanDA, an intelligent assistant for the PanDA (Production and Distributed Analysis) workload management system. You help users with questions about PanDA documentation, task status, and job failures."
+        prompt = f"{system_identity}\n\nAnswer based on the following context:\n{context}\n\nQuestion: {question}"
 
         # Call appropriate LLM based on provided model
         if model == "anthropic":
@@ -437,6 +457,44 @@ async def rag_ask(request: QuestionRequest) -> dict[str, str]:
     return {"answer": response_text}
 
 
+@app.post("/llm_ask")
+async def llm_ask(request: QuestionRequest) -> dict[str, str]:
+    """
+    Handle POST requests to the `/llm_ask` endpoint.
+
+    This endpoint receives a question/prompt and a model name, and sends it
+    directly to the LLM WITHOUT retrieval-augmented generation (RAG).
+    This is useful for agents that already have their context (e.g., task metadata).
+
+    Args:
+        request (QuestionRequest): The request body containing the prompt
+                                   and the desired LLM model.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the generated answer,
+                        structured as `{"answer": "..."}`.
+    """
+    logger.info(f"Direct LLM query using model: '{request.model}'")
+
+    # Call LLM directly without RAG
+    model = request.model.lower()
+    if model == "gemini":
+        response_text = await mcp._call_gemini(request.question)
+    elif model == "anthropic":
+        response_text = await mcp._call_anthropic(request.question)
+    elif model == "openai":
+        response_text = await mcp._call_openai(request.question)
+    elif model == "llama":
+        response_text = await mcp._call_llama(request.question)
+    elif model == "mistral":
+        response_text = await mcp._call_mistral(request.question)
+    else:
+        response_text = f"Unsupported model: {model}"
+
+    logger.info(f"Direct LLM query processed using model '{model}'.")
+    return {"answer": response_text}
+
+
 @app.post("/agent_ask")
 async def agent_ask(request: QuestionRequest) -> dict[str, str]:
     """
@@ -451,22 +509,34 @@ async def agent_ask(request: QuestionRequest) -> dict[str, str]:
             request.question,
             request.model.lower(),
             session_id="api",
-            cache="/app/cache"
+            cache="/app/cache",
+            mcp_instance=mcp
         )
 
-        selection_agent = SelectionAgent(agents, request.model.lower())
+        selection_agent = SelectionAgent(
+            agents,
+            request.model.lower(),
+            session_id="api",
+            cache="/app/cache"
+        )
         category = selection_agent.answer(request.question)
         agent = agents.get(category)
 
         logger.info(f"Routed to: {category}")
 
         if category == "document":
-            answer = agent.ask(request.question)
+            # Use "None" for session_id to disable history (each API call should be independent)
+            agent = DocumentQueryAgent(request.model.lower(), "None", mcp)
+            answer = await agent.ask(request.question)
         elif category == "log_analyzer":
             question = agent.generate_question("pilotlog.txt")
+            if question is None:
+                return {"answer": f"Error: Could not find job or log data. Please verify the job ID exists and has log files available.", "category": category}
             answer = agent.ask(question)
         elif category == "task":
             question = agent.generate_question()
+            if question is None:
+                return {"answer": f"Error: Task {agent.taskid} not found. Please verify the task ID is correct.", "category": category}
             answer = agent.ask(question)
         else:
             answer = "Not yet implemented"

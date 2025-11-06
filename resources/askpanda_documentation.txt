@@ -1,0 +1,169 @@
+# AskPanDA Documentation
+
+## What is AskPanDA?
+
+AskPanDA is an intelligent assistant system for the PanDA (Production and Distributed Analysis) workload management system. It provides natural language query capabilities to help users interact with PanDA tasks, jobs, and documentation.
+
+## Overview
+
+AskPanDA is a multi-agent LLM-powered system that can answer questions about:
+- PanDA documentation and concepts
+- Real-time task status and metadata
+- Job failure analysis and debugging
+
+## Architecture
+
+AskPanDA uses a multi-agent architecture with the following components:
+
+### Selection Agent
+Automatically routes user queries to the appropriate specialized agent based on the question type. Uses both rule-based classification and LLM-based classification for robustness.
+
+### Document Query Agent
+Handles general questions about PanDA using Retrieval-Augmented Generation (RAG). This agent:
+- Uses ChromaDB vector store with sentence transformers for semantic search
+- Indexes documentation from multiple sources (PanDA, Rucio, pilots, etc.)
+- Provides contextual answers based on official documentation
+
+### Task Status Agent (Data Query Agent)
+Provides real-time information about PanDA tasks by:
+- Fetching live metadata from BigPanda API
+- Analyzing task status, job counts, and error diagnostics
+- Presenting structured information about task execution
+
+### Log Analysis Agent
+Performs intelligent analysis of failed jobs by:
+- Downloading relevant log files from PanDA
+- Extracting error messages and diagnostics
+- Providing both expert and non-expert guidance for troubleshooting
+- Offering actionable recommendations for resolving failures
+
+## Key Features
+
+### Multi-Agent Routing
+Questions are automatically classified and routed to the most appropriate agent:
+- Documentation queries → Document Query Agent
+- Task status queries → Task Status Agent
+- Job failure queries → Log Analysis Agent
+
+### RAG System
+Uses ChromaDB vector database with the all-MiniLM-L6-v2 embedding model to provide contextually relevant answers from indexed documentation.
+
+### Real-Time Data Integration
+Connects to BigPanda API (https://bigpanda.cern.ch/) to fetch live task and job metadata.
+
+### Open WebUI Integration
+Compatible with Open WebUI through an Ollama shim, providing a conversational web interface.
+
+## How to Use AskPanDA
+
+### API Endpoint
+AskPanDA exposes a FastAPI REST endpoint at `/agent_ask`:
+
+```bash
+curl -X POST "http://localhost:8000/agent_ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Your question here", "model": "mistral"}'
+```
+
+### Supported Models
+- Mistral (mistral-small-latest by default) - Primary model
+- Gemini (gemini-2.0-flash) - Optional backup when quota allows
+
+### Example Queries
+
+**Documentation Questions:**
+- "What is PanDA?"
+- "How do I use pathena?"
+- "What is a PanDA pilot?"
+- "Explain PanDA job workflow"
+
+**Task Status Questions:**
+- "Tell me about task 47250094"
+- "What is the status of task 47250094?"
+- "Are there any problems with task 47250094?"
+
+**Job Failure Questions:**
+- "Why did job 6873281623 fail?"
+- "What caused the error in job 6873281623?"
+- "Can you analyze the failure of job 6873281623?"
+
+## Technical Details
+
+### Vector Store
+- Engine: ChromaDB
+- Embedding Model: all-MiniLM-L6-v2 (sentence transformers)
+- Auto-updates when documentation files change
+- Stores embeddings for semantic similarity search
+
+### Performance
+- Document queries: < 5 seconds
+- Task status queries: < 12 seconds
+- Log analysis queries: < 30 seconds
+
+### Infrastructure
+- Containerized deployment using Docker Compose
+- Persistent vector store for embeddings
+- Health monitoring endpoint at `/health`
+- API documentation at `/docs`
+
+## Use Cases
+
+### For Researchers
+- Quick answers about PanDA workflow and tools
+- Understanding PanDA concepts and terminology
+- Learning how to use PanDA commands like pathena
+
+### For Operators
+- Real-time task status monitoring
+- Automated failure analysis
+- Quick diagnostics for production issues
+
+### For Developers
+- Debugging job failures with expert guidance
+- Understanding error codes and diagnostics
+- Getting actionable recommendations for fixes
+
+### For New Users
+- Interactive onboarding with documentation Q&A
+- Learning PanDA concepts through natural language
+- Getting help without reading extensive manuals
+
+## System Requirements
+
+- Python 3.11+
+- Docker and Docker Compose
+- API keys for LLM providers (Gemini, Mistral, etc.)
+- Network access to BigPanda API
+
+## Development
+
+AskPanDA is developed as part of the PanDA project and uses:
+- FastAPI for the REST API
+- ChromaDB for vector storage
+- Google Gemini API for LLM inference
+- FastMCP for agent orchestration
+
+## Support
+
+For questions or issues with AskPanDA:
+- GitHub: PanDAWMS organization
+- Email: Contact PanDA support team
+- Documentation: See official PanDA documentation
+
+## Version History
+
+AskPanDA continues to evolve with new features:
+- Multi-agent architecture with intelligent routing
+- RAG-based documentation retrieval
+- Real-time BigPanda API integration
+- Automated log analysis with expert guidance
+- Open WebUI compatibility
+
+## Future Enhancements
+
+Planned improvements include:
+- Multi-modal support (charts, graphs from task data)
+- Conversational memory for follow-up questions
+- Integration with additional ATLAS systems
+- Expanded agent capabilities (pilot activity, queue status)
+- Enhanced error pattern recognition

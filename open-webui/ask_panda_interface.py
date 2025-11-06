@@ -55,7 +55,7 @@ class Pipe:
         if not user_valves:
             user_valves = self.UserValves()
 
-        model = "gemini"
+        model = "mistral"
         # user_id = __user__.get("id")
         last_assistant_message = body["messages"][-1]
         prompt = last_assistant_message["content"]
@@ -111,7 +111,7 @@ class Pipe:
 
             if category == "document":
                 print(f"Selected agent category: {category} (DocumentQueryAgent)")
-                answer = agent.ask(doc_prompt)  # use normalized prompt on follow-ups
+                answer = await agent.ask(doc_prompt)  # use normalized prompt on follow-ups
             elif category == "log_analyzer":
                 print(f"Selected agent category: {category} (LogAnalysisAgent)")
                 question = agent.generate_question("pilotlog.txt")

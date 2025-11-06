@@ -23,6 +23,7 @@
 import argparse
 import ast
 # import asyncio
+import google.generativeai as genai
 import logging
 import os
 import re
@@ -34,8 +35,13 @@ from time import sleep
 
 from tools.context_memory import ContextMemory
 from tools.errorcodes import EC_NOTFOUND, EC_OK, EC_UNKNOWN_ERROR, EC_TIMEOUT
-from tools.server_utils import MCP_SERVER_URL, check_server_health
+from tools.server_utils import MCP_SERVER_URL, check_server_health, call_mistral_direct
 from tools.tools import fetch_data, read_json_file, read_file
+
+# Configure Gemini API
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,12 +101,13 @@ class LogAnalysisAgent:
     def ask(self, question: str) -> str:
         """
         Send a question to the LLM and retrieve the answer.
+        Calls the model directly to avoid HTTP deadlock when invoked during request handling.
 
         Args:
-            question (str): The question to ask the RAG server.
+            question (str): The question to ask the LLM.
 
         Returns:
-            str: The answer returned by the MCP server.
+            str: The answer returned by the LLM.
         """
 
         def extract_python_literal(s: str) -> str:
@@ -112,55 +119,69 @@ class LogAnalysisAgent:
             payload = extract_python_literal(raw)
             return ast.literal_eval(payload)  # works with triple-quoted strings
 
-        server_url = f"{MCP_SERVER_URL}/rag_ask"
-        import time
-        logger.info(f"ask() was called at {time.time()}")
+        # Call the selected LLM directly to avoid HTTP deadlock
+        try:
+            if self.model == "gemini":
+                gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
+                response = gemini_model.generate_content(question)
+                answer = response.text
+            elif self.model == "mistral":
+                answer = call_mistral_direct(question)
+            else:
+                # For other models, fall back to HTTP (but this creates deadlock risk)
+                server_url = f"{MCP_SERVER_URL}/llm_ask"
+                response = requests.post(server_url, json={"question": question, "model": self.model}, timeout=30)
+                if not response.ok:
+                    return f"requests.post() error: {response.text}"
+                answer = response.json()["answer"]
+        except Exception as e:
+            err = f"Error calling LLM: {e}"
+            logger.error(err)
+            return f"error: {err}"
 
-        response = requests.post(server_url, json={"question": question, "model": self.model})
-        if response.ok:
-            answer = response.json()["answer"]
-            if not answer:
-                err = "No answer returned from the LLM."
-                logger.error(f"{err}")
-                return f"{err}"
+        if not answer:
+            err = "No answer returned from the LLM."
+            logger.error(f"{err}")
+            return f"error: {err}"
 
-            # Strip code block formatting
-            try:
-                # clean_code = re.sub(r"^```(?:python|json)?\n|\n```$", "", answer.strip())
-                clean_code = re.sub(r"^```(?:python|json)?\n|\n```$", "", answer.strip())
-            except re.error as e:
-                logger.error(f"Regex error while cleaning code: {e}")
-                return f"{e}"
+        if answer.lower().startswith("error:"):
+            logger.error(answer)
+            return answer
 
-            # convert the answer to a Python dictionary
-            try:
-                answer_dict = parse_answer_to_dict(clean_code)
-            except (SyntaxError, ValueError) as e:
-                err = f"Error converting answer to dictionary: {e}\n\nanswer={answer}\n\nclean_code={clean_code}"
-                logger.error(f"{err}")
-                return f"{err}"
+        # Strip code block formatting
+        try:
+            clean_code = re.sub(r"^```(?:python|json)?\n|\n```$", "", answer.strip())
+        except re.error as e:
+            logger.error(f"Regex error while cleaning code: {e}")
+            return f"error: {e}"
 
-            if not answer_dict:
-                err = "Failed to store the answer as a Python dictionary."
-                logger.error(f"{err}")
-                return f"{err}"
+        # convert the answer to a Python dictionary
+        try:
+            answer_dict = parse_answer_to_dict(clean_code)
+        except (SyntaxError, ValueError) as e:
+            err = f"Error converting answer to dictionary: {e}\n\nanswer={answer}\n\nclean_code={clean_code}"
+            logger.error(f"{err}")
+            return f"error: {err}"
 
-            # format the answer for better readability
-            formatted_answer = format_answer(answer_dict)
-            if not formatted_answer:
-                logger.error(f"Failed to format the answer from the LLM using: {answer_dict}")
-                sys.exit(1)
+        if not answer_dict:
+            err = "Failed to store the answer as a Python dictionary."
+            logger.error(f"{err}")
+            return f"error: {err}"
 
-            logger.info(f"Answer from {self.model.capitalize()}:\n{formatted_answer}")
+        # format the answer for better readability
+        formatted_answer = format_answer(answer_dict)
+        if not formatted_answer:
+            logger.error(f"Failed to format the answer from the LLM using: {answer_dict}")
+            return f"error: Failed to format answer"
 
-            # store the answer in the session memory
-            if self.session_id != "None":
-                memory.store_turn(self.session_id, "Investigate the job failure", formatted_answer)
-                logger.info(f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={formatted_answer}")
+        logger.info(f"Answer from {self.model.capitalize()}:\n{formatted_answer}")
 
-            return formatted_answer
+        # store the answer in the session memory
+        if self.session_id != "None":
+            memory.store_turn(self.session_id, "Investigate the job failure", formatted_answer)
+            logger.info(f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={formatted_answer}")
 
-        return f"requests.post() error: {response.text}"
+        return formatted_answer
 
     # async def fetch_all_data(self, log_file: str) -> tuple[int, dict or None, dict or None]:
 
@@ -469,6 +490,10 @@ Here's the error description:
         elif not file_dictionary:
             logger.warning(f"Error: Failed to fetch files for PandaID {self.pandaid}.")
             sys.exit(1)
+
+        if not metadata_dictionary:
+            logger.warning(f"No metadata available for PandaID {self.pandaid}.")
+            return None
 
         # Extract the relevant parts for error analysis
         if len(file_dictionary) == 1 and 'json' in file_dictionary:

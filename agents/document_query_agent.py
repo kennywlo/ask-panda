@@ -21,12 +21,14 @@
 """This script is a simple command-line agent that interacts with a RAG (Retrieval-Augmented Generation) server."""
 
 import argparse
+import asyncio
 import logging
 import os
 import requests
 import sys
 from json import JSONDecodeError
 from time import sleep
+from typing import Optional
 
 from tools.context_memory import ContextMemory
 from tools.errorcodes import EC_TIMEOUT
@@ -47,24 +49,22 @@ memory = ContextMemory()
 
 class DocumentQueryAgent:
     """A simple command-line agent that interacts with a RAG server to answer questions."""
-    def __init__(self, model: str, session_id: str) -> None:
+    def __init__(self, model: str, session_id: str, mcp_instance: Optional[object] = None) -> None:
         """
-        Initialize the DocumentQueryAgent with a model and session ID.
+        Initialize the DocumentQueryAgent with a model, session ID, and MCP instance.
 
         Args:
             model (str): The model to use for generating the answer.
             session_id (str): The session ID for tracking the conversation.
+            mcp_instance: The PandaMCP instance to use for RAG queries. Optional for HTTP fallback.
         """
         self.model = model  # e.g., OpenAI or Anthropic wrapper
         self.session_id = session_id  # Session ID for tracking conversation
+        self.mcp = mcp_instance
 
-    def ask(self, question: str) -> str:
+    async def ask(self, question: str) -> str:
         """
         Send a question to the RAG server and retrieve the answer.
-
-        The server URL is determined by the `RAG_SERVER_URL` environment
-        variable, defaulting to `"http://localhost:8000/rag_ask"` if not set.
-        The request to the server includes a 30-second timeout.
 
         Args:
             question (str): The question to ask the RAG server.
@@ -74,70 +74,80 @@ class DocumentQueryAgent:
                  request, or if the server responds with an error, a string
                  prefixed with "Error:" is returned detailing the issue.
         """
-        server_url = os.getenv("MCP_SERVER_URL", f"{MCP_SERVER_URL}/rag_ask")
+        # Construct prompt - keep it simple since rag_query() will add context and formatting
+        prompt = question
 
-        # Construct prompt
-        prompt = ""
-
-        # If session_id is provided, retrieve context from memory
+        # If session_id is provided, add conversation history as context
         # (it might not be set e.g. from OpenWebUI since that can handle memory itself)
         if self.session_id != "None":
-            # Retrieve context
             history = memory.get_history(self.session_id)
-
-            for user_msg, agent_msg in history:
-                prompt += f"User: {user_msg}\nAssistant: {agent_msg}\n"
-        prompt += f"User: {question}\nAssistant:"
-        # prompt += "If the question is unclear, reply with \'How can I help you with PanDA?\'.\n"
-        prompt += "You are a friendly and helpful assistant that answers questions about the PanDA system."
-        prompt += "Answer the question from the user in as detailed way as possible, using the provided documentation."
-        prompt += "Be sure to include any image references (including in markdown format) in your answer if they are mentioned in the documentation."
+            if history:
+                history_text = "\n".join([f"Previous: {user_msg}\nAnswer: {agent_msg}"
+                                         for user_msg, agent_msg in history])
+                prompt = f"{history_text}\n\nCurrent question: {question}"
         try:
-            response = requests.post(server_url, json={"question": prompt, "model": self.model}, timeout=30)
-            if response.ok:
-                try:
-                    # Store interaction
-                    answer = response.json()["answer"]
-                    if answer.startswith("Error:"):
-                        logger.info(answer, file=sys.stderr)
-                        return ""
-
-                    if self.session_id != "None":
-                        memory.store_turn(self.session_id, question, answer)
-                        logger.info(
-                            f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={answer}")
-
-                    # convert to dictionary before returning if necessary
-                    if self.session_id == "None":
-                        return answer
-
-                    answer = {
-                        "session_id": self.session_id,
-                        "question": question,
-                        "model": self.model,
-                        "answer": answer
-                    }
-                    return answer
-                except JSONDecodeError:  # Changed to use imported JSONDecodeError
-                    return "Error: Could not decode JSON response from server."
-                except KeyError:
-                    return "Error: 'answer' key missing in server response."
+            if self.mcp:
+                answer = await self.mcp.rag_query(prompt, self.model)
             else:
-                try:
-                    # Attempt to parse JSON for detailed error message
-                    error_data = response.json()
-                    if isinstance(error_data, dict) and "detail" in error_data:
-                        return f"Error from server: {error_data['detail']}"
-                    # Fallback if "detail" key is not found or JSON is not a dict
-                    return f"Error: Server returned status {response.status_code} - {response.text}"
-                except JSONDecodeError:  # Changed to use imported JSONDecodeError
-                    # Fall through to the generic error message if JSON parsing fails
-                    pass
-                # Fallback if JSON parsing fails or "detail" is not in a dict
-                return f"Error: Server returned status {response.status_code} - {response.text}"
+                answer = await self._query_via_http(prompt)
+
+            if answer.startswith("Error:"):
+                logger.info(answer, file=sys.stderr)
+                return ""
+
+            if self.session_id != "None":
+                memory.store_turn(self.session_id, question, answer)
+                logger.info(
+                    f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={answer}")
+
+            # convert to dictionary before returning if necessary
+            if self.session_id == "None":
+                return answer
+
+            answer = {
+                "session_id": self.session_id,
+                "question": question,
+                "model": self.model,
+                "answer": answer
+            }
+            return answer
+        except Exception as e:
+            return f"Error: An unexpected error occurred during RAG query - {e}"
+
+    async def _query_via_http(self, prompt: str) -> str:
+        """
+        Fallback method that queries the running AskPanDA HTTP server when no MCP instance is provided.
+        """
+        base_url = os.getenv("MCP_SERVER_URL", MCP_SERVER_URL)
+        server_url = f"{base_url.rstrip('/')}/rag_ask"
+
+        def _post():
+            return requests.post(server_url, json={"question": prompt, "model": self.model}, timeout=30)
+
+        try:
+            response = await asyncio.to_thread(_post)
         except requests.exceptions.RequestException as e:
             return f"Error: Network issue or server unreachable - {e}"
 
+        if response.ok:
+            try:
+                payload = response.json()
+                answer = payload["answer"]
+            except JSONDecodeError:
+                return "Error: Could not decode JSON response from server."
+            except KeyError:
+                return "Error: 'answer' key missing in server response."
+
+            return answer
+
+        try:
+            error_data = response.json()
+            if isinstance(error_data, dict) and "detail" in error_data:
+                return f"Error: {error_data['detail']}"
+            return f"Error: Server returned status {response.status_code} - {response.text}"
+        except JSONDecodeError:
+            pass
+        return f"Error: Server returned status {response.status_code} - {response.text}"
 
 def main() -> None:
     """
@@ -155,6 +165,8 @@ def main() -> None:
                     if an error occurs during the RAG server request.
     """
     # Check server health before proceeding
+    # This part of the code is for standalone execution of the agent,
+    # so it still needs to check the server health if it's not running within the server.
     ec = check_server_health()
     if ec == EC_TIMEOUT:
         logger.warning(f"Timeout while trying to connect to {MCP_SERVER_URL}.")
@@ -172,14 +184,23 @@ def main() -> None:
 
     parser.add_argument('--session-id', type=str, default="None",
                         help='Session ID for the context memory')
-    parser.add_argument('--question', type=str,
+    parser.add_argument('--question', type=str, required=True,
                         help='The question to ask the RAG server')
-    parser.add_argument('--model', type=str,
+    parser.add_argument('--model', type=str, required=True,
                         help='The model to use for generating the answer')
     args = parser.parse_args()
 
-    agent = DocumentQueryAgent(args.model, args.session_id)
-    answer = agent.ask(args.question)
+    # When running as a standalone script, we need to initialize PandaMCP
+    # This is a simplified initialization for command-line testing.
+    # In the actual server, 'mcp' is a global instance.
+    from ask_panda_server import PandaMCP, vectorstore_manager # Import here to avoid circular dependency
+    from pathlib import Path
+    resources_dir = Path("../resources")
+    chroma_dir = Path("../chromadb")
+    mcp_instance = PandaMCP("panda", resources_dir, chroma_dir, vectorstore_manager)
+
+    agent = DocumentQueryAgent(args.model, args.session_id, mcp_instance)
+    answer = asyncio.run(agent.ask(args.question))
     logger.info(f"Answer:\n{answer}")
 
 

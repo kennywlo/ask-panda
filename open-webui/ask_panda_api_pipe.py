@@ -17,7 +17,7 @@ class Pipe:
             description="Ask PanDA endpoint",
         )
         model: str = Field(
-            default="gemini",
+        default="mistral",
             description="LLM model",
         )
 
@@ -42,4 +42,3 @@ class Pipe:
             return r.json().get("answer", "No answer")
         except Exception as e:
             return f"Error: {e}"
-

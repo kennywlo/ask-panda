@@ -49,7 +49,7 @@ class Pipe:
         if not user_valves:
             user_valves = self.UserValves()
 
-        model = "gemini"
+        model = "mistral"
         user_id = __user__.get("id")
         last_assistant_message = body["messages"][-1]
         prompt = last_assistant_message["content"]
@@ -74,9 +74,10 @@ class Pipe:
 
         try:
             agent = DocumentQueryAgent(model, session_id)
-            answer = agent.ask(prompt)
+            answer = await agent.ask(prompt)
         except Exception as e:
             final_answer = f"[ERROR] {type(e).__name__}: {str(e)}"
+            answer = final_answer
 
         # the returned answer is a dictionary with the format
         #                     answer = {

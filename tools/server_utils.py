@@ -27,7 +27,9 @@ import requests
 from tools.errorcodes import EC_OK, EC_SERVERNOTRUNNING, EC_CONNECTIONPROBLEM, EC_TIMEOUT, EC_UNKNOWN_ERROR
 
 # MCP server IP and env vars
-MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://localhost:8000")
+MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://ask-panda:8000")
+MISTRAL_API_URL: str = "https://api.mistral.ai/v1/chat/completions"
+MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +40,51 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def call_mistral_direct(prompt: str, timeout: int = 60) -> str:
+    """
+    Call the Mistral API directly using the configured API key.
+
+    Args:
+        prompt: The prompt to send to Mistral.
+        timeout: Timeout in seconds for the HTTP request.
+
+    Returns:
+        str: The text content returned by Mistral, or an error message prefixed with "Error:".
+    """
+    api_key = os.getenv("MISTRAL_API_KEY")
+    if not api_key:
+        return "Error: MISTRAL_API_KEY not set in environment."
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": MISTRAL_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+
+    try:
+        response = requests.post(
+            MISTRAL_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return f"Error: Mistral API request failed - {exc}"
+
+    if not response.ok:
+        return f"Error: Mistral API responded with status {response.status_code} - {response.text}"
+
+    try:
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError) as exc:
+        return f"Error: Unexpected response format from Mistral API - {exc}"
 
 
 def check_server_health() -> int:

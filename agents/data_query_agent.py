@@ -23,6 +23,7 @@
 import argparse
 import ast
 # import asyncio
+import google.generativeai as genai
 import logging
 import os
 import re
@@ -35,8 +36,13 @@ from time import sleep
 from tools.context_memory import ContextMemory
 from tools.errorcodes import EC_NOTFOUND, EC_OK, EC_UNKNOWN_ERROR, EC_TIMEOUT
 from tools.https import get_base_url
-from tools.server_utils import MCP_SERVER_URL, check_server_health
+from tools.server_utils import MCP_SERVER_URL, check_server_health, call_mistral_direct
 from tools.tools import fetch_data, read_json_file
+
+# Configure Gemini API
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,53 +105,71 @@ class TaskStatusAgent:
             question (str): The question to ask the LLM.
 
         Returns:
-            str: The answer returned by the MCP server.
+            str: The answer returned by the LLM.
         """
-        server_url = f"{MCP_SERVER_URL}/rag_ask"
-        response = requests.post(server_url, json={"question": question, "model": self.model})
-        if response.ok:
-            answer = response.json()["answer"]
-            if not answer:
-                err = "No answer returned from the LLM."
-                logger.error(f"{err}")
-                return 'error: {err}'
+        # Call LLM directly to avoid HTTP deadlock
+        try:
+            if self.model == "gemini":
+                gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
+                response = gemini_model.generate_content(question)
+                answer = response.text
+            elif self.model == "mistral":
+                answer = call_mistral_direct(question)
+            else:
+                # For other models, fall back to HTTP (but this creates deadlock risk)
+                server_url = f"{MCP_SERVER_URL}/llm_ask"
+                response = requests.post(server_url, json={"question": question, "model": self.model}, timeout=30)
+                if not response.ok:
+                    return f"requests.post() error: {response.text}"
+                answer = response.json()["answer"]
+        except Exception as e:
+            err = f"Error calling LLM: {e}"
+            logger.error(err)
+            return f"error: {err}"
 
-            # Strip code block formatting
-            try:
-                clean_code = re.sub(r"^```(?:python)?\n|\n```$", "", answer.strip())
-            except re.error as e:
-                logger.error(f"Regex error while cleaning code: {e}")
-                return 'error: {err}'
+        if not answer:
+            err = "No answer returned from the LLM."
+            logger.error(f"{err}")
+            return 'error: {err}'
 
-            # convert the answer to a Python dictionary
-            try:
-                answer_dict = ast.literal_eval(clean_code)
-            except (SyntaxError, ValueError) as e:
-                err = f"Error converting answer to dictionary: {e}"
-                logger.error(f"{err}")
-                return 'error: {err}'
+        if answer.lower().startswith("error:"):
+            logger.error(answer)
+            return answer
 
-            if not answer_dict:
-                err = "Failed to store the answer as a Python dictionary."
-                logger.error(f"{err}")
-                return 'error: {err}'
+        # Strip code block formatting
+        try:
+            clean_code = re.sub(r"^```(?:python)?\n|\n```$", "", answer.strip())
+        except re.error as e:
+            logger.error(f"Regex error while cleaning code: {e}")
+            return 'error: {err}'
 
-            # format the answer for better readability
-            formatted_answer = format_answer(answer_dict)
-            if not formatted_answer:
-                logger.error(f"Failed to format the answer from the LLM using: {answer_dict}")
-                sys.exit(1)
+        # convert the answer to a Python dictionary
+        try:
+            answer_dict = ast.literal_eval(clean_code)
+        except (SyntaxError, ValueError) as e:
+            err = f"Error converting answer to dictionary: {e}"
+            logger.error(f"{err}")
+            return 'error: {err}'
 
-            logger.info(f"Answer from {self.model.capitalize()}:\n{formatted_answer}")
+        if not answer_dict:
+            err = "Failed to store the answer as a Python dictionary."
+            logger.error(f"{err}")
+            return 'error: {err}'
 
-            # store the answer in the session memory
-            if self.session_id != "None":
-                memory.store_turn(self.session_id, "Investigate the job failure", formatted_answer)
-                logger.info(f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={formatted_answer}")
+        # format the answer for better readability
+        formatted_answer = format_answer(answer_dict)
+        if not formatted_answer:
+            logger.error(f"Failed to format the answer from the LLM using: {answer_dict}")
+            sys.exit(1)
 
-            return formatted_answer
+        logger.info(f"Answer from {self.model.capitalize()}:\n{formatted_answer}")
 
-        return f"requests.post() error: {response.text}"
+        # store the answer in the session memory
+        if self.session_id != "None":
+            memory.store_turn(self.session_id, "Investigate the job failure", formatted_answer)
+            logger.info(f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={formatted_answer}")
+
+        return formatted_answer
 
     # async def fetch_all_data(self) -> tuple[int, dict or None, dict or None]:
     def fetch_all_data(self) -> tuple[int, dict or None, dict or None]:
@@ -262,15 +286,16 @@ Return only a valid Python dictionary. Here's the metadata dictionary:
         if exit_code == EC_NOTFOUND:
             logger.warning(
                 f"No metadata found for task {self.taskid}")
+            return None  # Return None instead of crashing
         elif not file_dictionary:
             logger.warning(f"Error: Failed to metadata files for PandaID {self.taskid}.")
-            sys.exit(1)
+            return None  # Return None instead of crashing
 
         # Formulate the question based on the extracted lines and metadata
         question = self.formulate_question(metadata_dictionary)
         if not question:
             logger.warning("No question could be generated.")
-            sys.exit(1)
+            return None  # Return None instead of crashing
 
         return question
 
