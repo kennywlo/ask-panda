@@ -62,7 +62,7 @@ class TaskStatusAgent:
     A simple agent that can give information about task status.
     This agent fetches metadata from PanDA, extracts relevant parts, and asks an LLM for analysis.
     """
-    def __init__(self, model: str, taskid: str, cache: str, session_id: str) -> None:
+    def __init__(self, model: str, taskid: str, cache: str, session_id: str, query_type: str = "task") -> None:
         """
         Initialize the TaskStatusAgent with a model.
 
@@ -71,8 +71,10 @@ class TaskStatusAgent:
             taskid (str): The PanDA job ID to analyze.
             cache (str): The location of the cache directory for storing downloaded files.
             session_id (str): The session ID for tracking the conversation.
+            query_type (str): The type of query, 'job' or 'task' (default: 'task').
         """
         self.model = model  # e.g., OpenAI or Anthropic wrapper
+        self.query_type = query_type
         try:
             self.taskid = int(taskid)  # PanDA task ID for the analysis
         except ValueError:
@@ -187,15 +189,10 @@ class TaskStatusAgent:
         # Download metadata and pilot log concurrently
         workdir = os.path.join(self.cache, "tasks")
         base_url = get_base_url()
-        # much info here (including all job ids belong to the task)
-        # url = f"{base_url}/jobs/?jeditaskid={self.taskid}&json&mode=nodrop"
-        url = f"{base_url}/task/{self.taskid}/?json"
-        # metadata_task = asyncio.create_task(fetch_data(self.taskid, filename="metadata.json", jsondata=True, workdir=workdir, url=url))
-
-        # Wait for download to complete
-        # metadata_success, metadata_message = await metadata_task
-
-        # metadata_success, metadata_message = await metadata_task
+        if self.query_type == "job":
+            url = f"{base_url}/jobs/?jeditaskid={self.taskid}&json&mode=nodrop"
+        else:
+            url = f"{base_url}/task/{self.taskid}/?json"
         metadata_success, metadata_message = fetch_data(self.taskid, filename="metadata.json", jsondata=True, workdir=workdir, url=url)
 
         if metadata_success != 0:
@@ -209,6 +206,11 @@ class TaskStatusAgent:
         if not task_data:
             logger.warning(f"Error: Failed to read the JSON data from {metadata_message}.")
             return EC_UNKNOWN_ERROR, None, None
+
+        # For job queries, check if the 'jobs' key exists and is not empty
+        if self.query_type == "job" and (not task_data.get("jobs")):
+            logger.warning(f"No jobs found for jeditaskid {self.taskid}")
+            return EC_NOTFOUND, _file_dictionary, _metadata_dictionary
 
         # Extract relevant metadata from the JSON data
         try:
@@ -290,6 +292,9 @@ Return only a valid Python dictionary. Here's the metadata dictionary:
         elif not file_dictionary:
             logger.warning(f"Error: Failed to metadata files for PandaID {self.taskid}.")
             return None  # Return None instead of crashing
+        elif not metadata_dictionary: # Add check for empty metadata dictionary
+            logger.warning(f"Error: Metadata dictionary is empty for PandaID {self.taskid}.")
+            return None
 
         # Formulate the question based on the extracted lines and metadata
         question = self.formulate_question(metadata_dictionary)

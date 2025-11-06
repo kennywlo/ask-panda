@@ -122,7 +122,7 @@ class DocumentQueryAgent:
         server_url = f"{base_url.rstrip('/')}/rag_ask"
 
         def _post():
-            return requests.post(server_url, json={"question": prompt, "model": self.model}, timeout=30)
+            return requests.post(server_url, json={"question": prompt, "model": self.model}, timeout=300)
 
         try:
             response = await asyncio.to_thread(_post)

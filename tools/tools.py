@@ -108,8 +108,12 @@ def read_json_file(file_path: str) -> Optional[dict]:
     """
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
+            content = f.read()
+            if not content:
+                logger.warning(f"JSON file {file_path} is empty.")
+                return {}
+            return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
         logger.warning(f"Failed to read JSON file {file_path}: {e}")
         return None
 
