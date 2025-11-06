@@ -7,3 +7,5 @@ error_analyzer.log
 /chromadb/
 .env
 .swp
+__pycache__/
+

@@ -7,6 +7,7 @@
 - [ ] Verify Mistral API key is valid and has sufficient quota
 - [ ] Set up API key rotation/backup (Mistral as fallback)
 - [ ] Monitor response times (should be <10s for task queries, <3s for docs)
+- [ ] Run `./pre_demo_check.sh` to validate vector store load, Ollama shim, and disk space
 - [ ] Test with conference WiFi beforehand if possible
 
 ### 2. Docker & Infrastructure
@@ -72,6 +73,7 @@ Take live questions from audience, showing:
 - Agent routing (document vs task vs log_analyzer queries)
 - Real-time classification
 - Error handling (if ID doesn't exist)
+- Ambiguous phrasing like raw IDs, "Show me 47250094", or "Is task 47250094 finished?"
 
 ### Demo Scenario 5: Open WebUI Integration (Optional, 1 min)
 Show the Ollama shim integration with Open WebUI
@@ -84,8 +86,11 @@ Show the Ollama shim integration with Open WebUI
 ### Document Queries (Fast, Reliable)
 ```
 - What is PanDA?
+- Do you know about AskPanDA?
 - How do I use pathena?
 - What is a PanDA pilot?
+- How does the PanDA pilot work?
+- How do I get help with using PanDA?
 - Explain PanDA job workflow
 ```
 
@@ -94,6 +99,7 @@ Show the Ollama shim integration with Open WebUI
 - Tell me about task 47250094
 - What is the status of task 47250094?
 - Are there any problems with task 47250094?
+- Is task 47250094 finished?
 ```
 
 ### Log Analysis Queries (Advanced, Most Impressive)
@@ -108,6 +114,8 @@ Show the Ollama shim integration with Open WebUI
 - Tell me about task 99999999999 (non-existent)
 - What is AskPanDA? (self-referential)
 - Just a number: 47250094 (ambiguous query)
+- Show me 47250094 (implicit task lookup)
+- Is task 47250094 finished? (status phrasing without explicit context)
 ```
 
 ## Backup Plans
