@@ -62,25 +62,23 @@ class SelectionAgent:
 
     def classify_question(self, question: str) -> str:
         """
-        Enhanced classification with entity extraction and dynamic agent creation.
+        LLM-based intelligent classification with entity extraction and dynamic agent creation.
 
         Strategy:
-        1. Try regex extraction first (fast path for explicit task/job IDs)
-        2. If agents already exist from regex, use rule-based routing
-        3. Otherwise, use LLM with structured JSON output to extract IDs and classify
-        4. Dynamically create agents if LLM extracts IDs that regex missed
-        """
-        # Fast path: If we have a task or job agent already, use it directly
-        # This means regex extraction succeeded in figure_out_agents()
-        if self.agents.get("task") is not None:
-            return "task"
-        if self.agents.get("log_analyzer") is not None:
-            return "log_analyzer"
+        1. Extract only the last user message from conversation history (for clean input)
+        2. Use LLM to intelligently classify the question and extract entity IDs
+        3. Dynamically create specialized agents based on LLM's classification
+        4. Return the appropriate agent category
 
-        # Fallback: Use LLM with structured output for entity extraction + classification
+        This is a true agent-based approach where the LLM understands context, intent, and synonyms.
+        """
+        # Extract the last user message from conversation history for cleaner classification
+        clean_question = _extract_last_user_message(question)
+
+        # Use LLM with structured output for intelligent classification + entity extraction
         prompt = f"""Analyze this question and return ONLY a valid JSON object with entity extraction and classification.
 
-Question: "{question}"
+Question: "{clean_question}"
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -92,8 +90,9 @@ Return ONLY valid JSON in this exact format:
 }}
 
 Category Definitions:
-- task: Questions about specific PanDA task status, job counts, or task metadata
-- log_analyzer: Questions about why a specific job failed or log analysis
+- task: Questions about specific PanDA task status, job counts, or task metadata.
+  NOTE: "job" in status/info contexts (e.g., "status of job X", "info on job X") refers to TASKS, not log analysis.
+- log_analyzer: Questions about why a specific job FAILED or log analysis (must mention failure/error/crash/problem).
 - document: General usage questions, how-to guides, concepts (PanDA, prun, pathena, error codes)
 - queue: Questions about site/queue data (corepower, copytool, queue status, rucio usage)
 - pilot_activity: Questions about pilot activity, failures, statistics, or Grafana links
@@ -102,6 +101,12 @@ Examples:
 
 Q: "What's happening with 47250094?"
 {{"category": "task", "task_id": 47250094, "job_id": null, "confidence": "high", "reasoning": "Numeric ID without context likely refers to task"}}
+
+Q: "Can you tell me the status of job 47250094?"
+{{"category": "task", "task_id": 47250094, "job_id": null, "confidence": "high", "reasoning": "Status query with 'job' refers to task status, not failure analysis"}}
+
+Q: "How about job 12345?"
+{{"category": "task", "task_id": 12345, "job_id": null, "confidence": "high", "reasoning": "General inquiry about job is a task status query"}}
 
 Q: "Why did job 12345 crash?"
 {{"category": "log_analyzer", "task_id": null, "job_id": 12345, "confidence": "high", "reasoning": "Explicit job failure question with job ID"}}
@@ -115,7 +120,7 @@ Q: "How do I use pathena?"
 Q: "Which queues support multi-core jobs?"
 {{"category": "queue", "task_id": null, "job_id": null, "confidence": "high", "reasoning": "Question about queue capabilities"}}
 
-Now analyze: "{question}"
+Now analyze: "{clean_question}"
 
 Return ONLY the JSON object, nothing else.
 """
@@ -275,9 +280,80 @@ def _find_last_match(pattern: str, text: str) -> int or None:
         return None
 
 
+###############################################################################
+# Helper Functions for LLM-based Classification
+###############################################################################
+
+def _extract_last_user_message(text: str) -> str:
+    """
+    Extract the last user message from a conversation history.
+    Handles format: "user: msg1\nassistant: msg2\nuser: msg3"
+
+    This ensures the LLM classifies based on the actual user query, not
+    conversation history that might contain misleading keywords.
+
+    Args:
+        text: The conversation text (may include full history).
+
+    Returns:
+        str: The last user message, or the full text if no user prefix found.
+    """
+    # Split by lines and find all user messages
+    lines = text.split('\n')
+    user_messages = []
+    current_msg = []
+
+    for line in lines:
+        if line.strip().startswith('user:'):
+            if current_msg:
+                user_messages.append('\n'.join(current_msg))
+            current_msg = [line.replace('user:', '', 1).strip()]
+        elif current_msg and not line.strip().startswith('assistant:'):
+            current_msg.append(line)
+        elif line.strip().startswith('assistant:'):
+            if current_msg:
+                user_messages.append('\n'.join(current_msg))
+                current_msg = []
+
+    # Add the last message if still in buffer
+    if current_msg:
+        user_messages.append('\n'.join(current_msg))
+
+    # Return the last user message, or full text if no user prefix found
+    return user_messages[-1] if user_messages else text
+
+
+###############################################################################
+# DEPRECATED: Old Regex-based Extraction Functions
+# These are no longer used - kept for reference only.
+# The LLM now handles all classification and entity extraction intelligently.
+###############################################################################
+
+def _is_failure_query(text: str) -> bool:
+    """
+    DEPRECATED: Regex-based failure detection.
+
+    Detect if the query is asking about failures/errors vs general status.
+    Only checks the last user message to avoid false positives from conversation history.
+
+    Args:
+        text: The query text to analyze (may include conversation history).
+
+    Returns:
+        bool: True if query is about failures/errors, False otherwise.
+    """
+    # Extract only the last user message to avoid false positives from history
+    last_message = _extract_last_user_message(text)
+
+    # Match word stems to catch variations (fail/failed/failing, crash/crashed/crashing, etc.)
+    failure_keywords = r'\b(fail|crash|error|wrong|why|exception|abort|problem|issue)'
+    return bool(re.search(failure_keywords, last_message, re.IGNORECASE))
+
+
 def extract_job_id(text: str) -> int or None:
     """
     Extract a job ID from the given text using a regular expression.
+    Only extracts when query is about job failures/errors.
 
     Args:
         text: The text from which to extract the job ID.
@@ -285,13 +361,20 @@ def extract_job_id(text: str) -> int or None:
     Returns:
         int or None: The extracted job ID as an integer, or None if no job ID is found.
     """
+    # Only extract job ID for failure/error queries
+    if not _is_failure_query(text):
+        return None
+
+    # Extract from last user message only to avoid false matches in history
+    last_message = _extract_last_user_message(text)
     pattern = r'\b(?:job|panda[\s_]?id)\s+(\d+)\b'
-    return _find_last_match(pattern, text)
+    return _find_last_match(pattern, last_message)
 
 
 def extract_task_id(text: str) -> int or None:
     """
     Extract a task ID from the given text using a regular expression.
+    Treats "job" as a synonym for "task" when the query is about status (not failures).
 
     Args:
         text: The text from which to extract the task ID.
@@ -299,35 +382,48 @@ def extract_task_id(text: str) -> int or None:
     Returns:
         int or None: The extracted task ID as an integer, or None if no task ID is found.
     """
+    # Extract from last user message only to avoid false matches in history
+    last_message = _extract_last_user_message(text)
+
+    # Primary pattern: explicit "task" or "task_id"
     pattern = r'\b(?:task[\s_]?id|task)\s+(\d+)\b'
-    task_id = _find_last_match(pattern, text)
+    task_id = _find_last_match(pattern, last_message)
     if task_id is not None:
         return task_id
 
-    # fallback: bare numbers near end (e.g., "tell me 47250094"), but only when the question
-    # does not mention jobs/panda ids to avoid misrouting log queries.
-    if re.search(r'\b(job|panda[\s_]?id)\b', text, re.IGNORECASE):
+    # Context-aware synonym: treat "job" as "task" for status queries (not failure queries)
+    if not _is_failure_query(text):
+        job_as_task_pattern = r'\b(?:job)\s+(\d+)\b'
+        task_id = _find_last_match(job_as_task_pattern, last_message)
+        if task_id is not None:
+            return task_id
+
+    # Fallback: bare numbers near end (e.g., "tell me 47250094")
+    # Only when the question doesn't mention job/panda_id in failure context
+    if _is_failure_query(text) and re.search(r'\b(job|panda[\s_]?id)\b', last_message, re.IGNORECASE):
         return None
 
     bare_pattern = r'(\d{6,})'
-    return _find_last_match(bare_pattern, text)
+    return _find_last_match(bare_pattern, last_message)
 
 
 def figure_out_agents(question: str, model: str, session_id: str, cache: str = None, mcp_instance=None):
     """
-    Determine the appropriate agent to handle the given question.
+    Create base agent dictionary without pre-extracting IDs.
+    The LLM will intelligently classify and extract entities, creating specialized agents dynamically.
+
     Args:
-        question:
-        mcp_instance:
+        question: The user's question (unused - kept for backward compatibility)
+        model: The model to use
+        session_id: Session ID for tracking
+        cache: Cache directory path
+        mcp_instance: MCP server instance
 
     Returns:
-
+        dict: Dictionary with base agents, specialized agents created dynamically by LLM
     """
-    # does the question contain a job or task id?
-    # use a regex to extract "job NNNNN" from args.question
-    pandaid = extract_job_id(question)
-    taskid = extract_task_id(question)
-    return get_agents(model, session_id, pandaid, taskid, cache, mcp_instance)
+    # Return base agents only - let the LLM do intelligent classification and create specialized agents
+    return get_agents(model, session_id, pandaid=None, taskid=None, cache=cache, mcp_instance=mcp_instance)
 
 
 def main() -> None:
@@ -372,24 +468,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # does the question contain a job or task id?
-    # use a regex to extract "job NNNNN" from args.question
-    pandaid = extract_job_id(args.question)
-    if pandaid is not None:
-        logger.info(f"Extracted PanDA ID: {pandaid}")
-    else:
-        logger.info("No PanDA ID found in the question.")
-    taskid = extract_task_id(args.question)
-    if taskid is not None:
-        logger.info(f"Extracted Task ID: {taskid}")
-    else:
-        logger.info("No Task ID found in the question.")
-
-    agents = get_agents(args.model, args.session_id, pandaid, taskid, args.cache)
+    # Create base agents - LLM will intelligently classify and extract IDs
+    agents = figure_out_agents(args.question, args.model, args.session_id, args.cache)
     selection_agent = SelectionAgent(agents, args.model, session_id=args.session_id, cache=args.cache)
 
+    # LLM-based classification with dynamic agent creation
     category = selection_agent.answer(args.question)
-    agent = agents.get(category)
+    agent = selection_agent.agents.get(category)  # Use selection_agent.agents (may have been dynamically created)
     logger.info(f"Selected agent category: {category}")
     if category == "document":
         logger.info(f"Selected agent category: {category} (DocumentQueryAgent)")
@@ -398,16 +483,16 @@ def main() -> None:
         return answer
     elif category == "log_analyzer":
         logger.info(f"Selected agent category: {category} (LogAnalysisAgent)")
-        if pandaid is None:
-            return "Sorry, I need a PanDA ID to answer questions about job logs."
+        if agent is None:
+            return "Sorry, I couldn't find a job ID to analyze logs."
         question = agent.generate_question("pilotlog.txt")
         answer = agent.ask(question)
         logger.info(f"Answer:\n{answer}")
         return answer
     elif category == "task":
         logger.info(f"Selected agent category: {category} (TaskStatusAgent)")
-        if taskid is None:
-            return "Sorry, I need a Task ID to answer questions about task status."
+        if agent is None:
+            return "Sorry, I couldn't find a task ID to check status."
         question = agent.generate_question()
         answer = agent.ask(question)
         logger.info(f"Answer:\n{answer}")
