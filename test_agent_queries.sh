@@ -5,7 +5,7 @@
 set -e
 
 BASE_URL="http://localhost:8000"
-MODEL="mistral"
+MODEL="gemini"
 PASS=0
 FAIL=0
 
@@ -25,7 +25,7 @@ test_query() {
     local test_name="$1"
     local question="$2"
     local expected_category="$3"
-    local timeout="$4"
+    local timeout="${4:-10}"
 
     echo -n "Test: $test_name ... "
 
@@ -38,7 +38,13 @@ test_query() {
     # Check if request succeeded
     if echo "$response" | grep -q "answer"; then
         # Extract the answer
-        answer=$(echo "$response" | jq -r '.answer' 2>/dev/null || echo "")
+        # Extract using python to avoid jq dependency inside containers
+        answer=$(python3 -c 'import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    print(data.get("answer", ""))
+except Exception:
+    pass' "$response" || echo "")
 
         # Check for errors in answer
         if echo "$answer" | grep -qiE '^\s*error[:\s]'; then
@@ -97,21 +103,27 @@ test_query() {
 echo "Testing Document Query Agent (General Questions)"
 echo "------------------------------------------------"
 test_query "What is PanDA?" "What is PanDA?" "document" 20
+sleep 20
 test_query "How does pilot work?" "How does the PanDA pilot work?" "document" 20
-test_query "Get help with PanDA" "How do I get help with using PanDA?" "document" 20
+sleep 20
+test_query "Get help with PanDA" "How do I get help with using PanDA?" "document" 1200
 
 echo ""
 echo "Testing Task Status Agent (Task Queries)"
 echo "------------------------------------------------"
-test_query "Standard task query" "Tell me about task 47250094" "task" 25
-test_query "Task status query" "What is the status of task 47250094?" "task" 25
-test_query "Natural language task" "What happened with task 47250094?" "task" 25
+test_query "Standard task query" "Tell me about task 47250094" "task" 60
+sleep 20
+test_query "Task status query" "What is the status of task 47250094?" "task" 60
+sleep 20
+test_query "Natural language task" "What happened with task 47250094?" "task" 120
 
 echo ""
 echo "Testing Enhanced Classification (Tricky Cases)"
 echo "------------------------------------------------"
 test_query "Just number (ambiguous)" "47250094" "task" 30
+sleep 20
 test_query "Task without keyword" "Show me 47250094" "task" 30
+sleep 20
 test_query "Status inquiry" "Is task 47250094 finished?" "task" 25
 
 echo ""

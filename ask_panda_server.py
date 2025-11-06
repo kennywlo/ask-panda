@@ -524,21 +524,39 @@ async def agent_ask(request: QuestionRequest) -> dict[str, str]:
 
         logger.info(f"Routed to: {category}")
 
-        if category == "document":
+        routed_category = category
+        use_document_agent = category in ["document", "pilot_activity", "queue"] or agent is None
+        if agent is None and category not in ["document", "pilot_activity", "queue"]:
+            logger.info(f"No specialized agent available for category '{category}'. Falling back to document agent.")
+            routed_category = "document"
+
+        if use_document_agent:
             # Use "None" for session_id to disable history (each API call should be independent)
             agent = DocumentQueryAgent(request.model.lower(), "None", mcp)
             answer = await agent.ask(request.question)
         elif category == "log_analyzer":
+            if agent is None:
+                return {"answer": "Error: Please provide a PanDA job ID so I can analyze the logs.", "category": "document"}
             question = agent.generate_question("pilotlog.txt")
             if question is None:
-                return {"answer": f"Error: Could not find job or log data. Please verify the job ID exists and has log files available.", "category": category}
+                return {"answer": f"Error: Could not find job or log data. Please verify the job ID exists and has log files available.", "category": routed_category}
             answer = agent.ask(question)
         elif category == "task":
+            if agent is None:
+                return {"answer": "Error: Please provide a PanDA task ID so I can look up the task status.", "category": "document"}
+            query_type = "job" if "job" in request.question.lower() else "task"
+            agent = agents.get(category)
+            if agent:
+                agent.query_type = query_type
+
+            id_type = "job" if "job" in request.question.lower() else "task"
+            entity_type = "Job" if id_type == "job" else "Task"
             question = agent.generate_question()
             if question is None:
-                return {"answer": f"Error: Task {agent.taskid} not found. Please verify the task ID is correct.", "category": category}
+                return {"answer": f"Error: {entity_type} {agent.taskid} not found. Please verify the {id_type} ID is correct.", "category": routed_category}
             answer = agent.ask(question)
         else:
+            logger.warning(f"Unhandled category: {category}")
             answer = "Not yet implemented"
 
         if isinstance(answer, dict):
@@ -546,7 +564,7 @@ async def agent_ask(request: QuestionRequest) -> dict[str, str]:
         else:
             final_answer = answer
 
-        return {"answer": final_answer, "category": category}
+        return {"answer": final_answer, "category": routed_category}
     except Exception as e:
         logger.error(f"Agent error: {e}")
         return {"answer": f"Error: {str(e)}", "category": "error"}

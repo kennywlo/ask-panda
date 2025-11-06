@@ -92,7 +92,9 @@ Return ONLY valid JSON in this exact format:
 Category Definitions:
 - task: Questions about specific PanDA task status, job counts, or task metadata.
   NOTE: "job" in status/info contexts (e.g., "status of job X", "info on job X") refers to TASKS, not log analysis.
+- IMPORTANT: Only return "task" if the user mentions a numeric PanDA task or job ID (at least 5 digits). Without an ID, default to "document".
 - log_analyzer: Questions about why a specific job FAILED or log analysis (must mention failure/error/crash/problem).
+- IMPORTANT: Only return "log_analyzer" if there is a numeric PandaID or job ID referenced in the failure question.
 - document: General usage questions, how-to guides, concepts (PanDA, prun, pathena, error codes)
 - queue: Questions about site/queue data (corepower, copytool, queue status, rucio usage)
 - pilot_activity: Questions about pilot activity, failures, statistics, or Grafana links
@@ -140,11 +142,13 @@ Return ONLY the JSON object, nothing else.
                 task_id = str(result["task_id"])
                 logger.info(f"Dynamically creating TaskStatusAgent for task {task_id}")
                 try:
+                    query_type = "job" if "job" in clean_question.lower() else "task"
                     self.agents["task"] = TaskStatusAgent(
                         self.model,
                         task_id,
                         self.cache,
-                        self.session_id
+                        self.session_id,
+                        query_type=query_type
                     )
                     return "task"
                 except Exception as e:
@@ -167,6 +171,16 @@ Return ONLY the JSON object, nothing else.
 
             # Return the classified category
             category = result.get("category", "document")
+            task_id = result.get("task_id")
+            job_id = result.get("job_id")
+
+            if category == "task" and not task_id:
+                logger.info("LLM selected 'task' without task_id; defaulting to document.")
+                category = "document"
+            if category == "log_analyzer" and not job_id:
+                logger.info("LLM selected 'log_analyzer' without job_id; defaulting to document.")
+                category = "document"
+
             return category if category in ["task", "log_analyzer", "document", "queue", "pilot_activity"] else "document"
 
         except (json.JSONDecodeError, KeyError) as e:
@@ -234,12 +248,12 @@ Return ONLY the JSON object, nothing else.
             return answer
 
         except Exception as e:
-            error_msg = f"Error: {e}"
+            error_msg = f"Error processing query: {e}"
             logger.error(f"Error in SelectionAgent.ask(): {e}")
             return error_msg if returnstring else {"session_id": self.session_id, "answer": error_msg}
 
 
-def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid: str or None, cache: str, mcp_instance=None) -> dict:
+def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid: str or None, cache: str, mcp_instance=None, question: str = "") -> dict:
     """
     Create and return a dictionary of agents for different categories.
 
@@ -250,14 +264,16 @@ def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid
         taskid (str or None): The task ID for the job or task, if applicable.
         cache (str): The location of the cache directory.
         mcp_instance: The PandaMCP instance.
+        question (str): The user's question.
 
     Returns:
         dict: A dictionary mapping agent categories to their respective agent classes.
     """
+    query_type = "job" if "job" in question.lower() else "task"
     return {
         "document": DocumentQueryAgent(model, session_id, mcp_instance),
         "queue": None,
-        "task": TaskStatusAgent(model, taskid, cache, session_id) if session_id and taskid else None,
+        "task": TaskStatusAgent(model, taskid, cache, session_id, query_type=query_type) if session_id and taskid else None,
         "log_analyzer": LogAnalysisAgent(model, pandaid, cache, session_id) if pandaid else None,
         "pilot_activity": None
     }
