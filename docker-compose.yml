@@ -60,6 +60,7 @@ services:
       - ASK_PANDA_BASE_URL=http://ask-panda:8000
       - OLLAMA_SHIM_MODEL=${OLLAMA_SHIM_MODEL:-mistral}
       - OLLAMA_SHIM_MODEL_DISPLAY=${OLLAMA_SHIM_MODEL_DISPLAY:-mistral-proxy}
+      - OLLAMA_SHIM_MODELS=${OLLAMA_SHIM_MODELS:-}
       - OLLAMA_SHIM_PORT=11434
       - OLLAMA_SHIM_VERSION=${OLLAMA_SHIM_VERSION:-v0.0-shim}
     networks:
@@ -69,6 +70,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.6.36
+    container_name: ask-panda-webui
+    ports:
+      - "8082:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama-shim:11434
+    volumes:
+      - open-webui-data:/app/backend/data
+    networks:
+      - ask-panda-network
+    depends_on:
+      - ollama-shim
+    restart: unless-stopped
+
 networks:
   ask-panda-network:
     driver: bridge
+
+volumes:
+  open-webui-data:
