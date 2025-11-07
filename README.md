@@ -79,7 +79,7 @@ docker compose logs -f
 
 4. Test the setup:
 ```bash
-./test-docker-setup.sh
+./docker/scripts/test-docker-setup.sh
 ```
 
 5. Stop the services:
@@ -187,11 +187,11 @@ The following pilot error codes have been verified to work with the error analys
 
 # Testing and Monitoring
 
-- `final_test.sh` exercises the Open WebUI ↔ Ollama shim ↔ FastAPI stack end-to-end.
-- `test_agent_queries.sh` hammers `/agent_ask` directly to make sure document, task, and log questions route correctly (set `BASE_URL` if you’re not on localhost).
-- `pre_demo_check.sh` verifies the vector store, Docker health checks, and disk space before a live run.
+- `sc25-demo/scripts/final_test.sh` exercises the Open WebUI ↔ Ollama shim ↔ FastAPI stack end-to-end.
+- `sc25-demo/scripts/test_agent_queries.sh` hammers `/agent_ask` directly to make sure document, task, and log questions route correctly (set `BASE_URL` if you’re not on localhost).
+- `sc25-demo/scripts/pre_demo_check.sh` verifies the vector store, Docker health checks, and disk space before a live run.
 
-Run these scripts whenever you rebase with upstream master to ensure the shared client/server layers remain compatible.
+Run these scripts whenever you rebase with upstream master to ensure the shared client/server layers remain compatible. The SC25 live-demo guide plus these scripts now live under `sc25-demo/` (see `sc25-demo/README.md` and `sc25-demo/scripts/`).
 
 #   Data Query
 

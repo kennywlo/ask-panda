@@ -7,7 +7,7 @@
 - [ ] Verify Mistral API key is valid and has sufficient quota
 - [ ] Set up API key rotation/backup (Mistral as fallback)
 - [ ] Monitor response times (should be <10s for task queries, <3s for docs)
-- [ ] Run `./pre_demo_check.sh` to validate vector store load, Ollama shim, and disk space
+- [ ] Run `./sc25-demo/scripts/pre_demo_check.sh` to validate vector store load, Ollama shim, and disk space
 - [ ] Test with conference WiFi beforehand if possible
 
 ### 2. Docker & Infrastructure
@@ -190,7 +190,7 @@ echo -e "\n=== All checks complete ==="
 **30 minutes before:**
 - [ ] Restart Docker containers
 - [ ] Run performance monitoring script
-- [ ] Run `./test_agent_queries.sh` (documents/tasks/logs) in addition to `./final_test.sh`
+- [ ] Run `./sc25-demo/scripts/test_agent_queries.sh` (documents/tasks/logs) in addition to `./sc25-demo/scripts/final_test.sh`
 - [ ] Test all demo queries
 - [ ] Check API quotas/rate limits
 - [ ] Verify display output on projector
