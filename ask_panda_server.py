@@ -44,6 +44,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 import anthropic
+import asyncio
 import google.generativeai as genai
 import httpx  # Import httpx
 import openai
@@ -63,7 +64,9 @@ from pydantic import BaseModel
 from typing import Optional  # For type hinting
 
 from agents.document_query_agent import DocumentQueryAgent
-from tools.tools import get_vectorstore_manager
+from tools.tools import get_vectorstore_manager, Timer
+
+_MISTRAL_CONCURRENCY = asyncio.Semaphore(4)
 
 
 @asynccontextmanager
@@ -153,7 +156,27 @@ class PandaMCP(FastMCP):
         self.vectorstore_dir = vectorstore_dir
         self.vectorstore_manager = vectorstore_manager
 
-    async def _call_mistral(self, prompt: str) -> str:
+        self._mistral_client = None
+        self._mistral_lock = asyncio.Lock()
+
+    async def _get_mistral_client(self) -> Mistral:
+        """
+        Lazily initialize and return the Mistral client.
+
+        Returns:
+            Mistral: An instance of the Mistral client.
+        """
+        if self._mistral_client is not None:
+            return self._mistral_client
+
+        async with self._mistral_lock:
+            if self._mistral_client is None:
+                self._mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
+                await self._mistral_client.__aenter__()
+
+        return self._mistral_client
+
+    async def _call_mistral_old(self, prompt: str) -> str:
         """
         Use the official Mistral SDK for cleaner, more reliable API calls.
 
@@ -166,7 +189,7 @@ class PandaMCP(FastMCP):
             return "Error: MISTRAL_API_KEY not set in environment."
 
         model_name = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
-
+        t = Timer("mistral")
         try:
             async with Mistral(api_key=api_key) as client:
                 res = await client.chat.complete_async(
@@ -174,9 +197,41 @@ class PandaMCP(FastMCP):
                     messages=[{"role": "user", "content": prompt}],
                     stream=False
                 )
+                t.done()
                 return res.choices[0].message.content.strip()
         except Exception as e:
             return f"Mistral SDK error (model={model_name}): {str(e)}"
+
+    async def _call_mistral(self, prompt: str) -> str:
+        api_key = os.getenv("MISTRAL_API_KEY")
+        if not api_key:
+            return "Error: MISTRAL_API_KEY not set in environment."
+
+        model_name = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+        system_msg = "You are a helpful assistant."
+
+        async with _MISTRAL_CONCURRENCY:
+            tries, backoff = 3, 1.0
+            last_err = None
+            for _ in range(tries):
+                try:
+                    client = await self._get_mistral_client()
+                    # If your mistralai version exposes client-level httpx settings,
+                    # they’ll be used here; otherwise it uses sane defaults.
+                    res = await client.chat.complete_async(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": prompt},
+                        ],
+                        stream=False,
+                    )
+                    return res.choices[0].message.content.strip()
+                except Exception as e:
+                    last_err = e
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
+            return f"Mistral SDK error after retries (model={model_name}): {last_err!s}"
 
     async def _call_anthropic(self, prompt: str) -> str:
         """
