@@ -9,8 +9,8 @@ expects from an Ollama server. Instead of talking to a local Ollama daemon,
 each request is forwarded to the Ask-PanDA HTTP API, which in turn uses the
 Mistral API (or any other LLM provider configured inside Ask-PanDA).
 
-Current Configuration:
-    - Backend: Ask-PanDA RAG endpoint (`/rag_ask`)
+Default Configuration:
+    - Backend: Ask-PanDA agent endpoint (`/agent_ask`) for chat
     - LLM: Mistral API (open-mistral-7b model)
     - Model exposed: mistral-proxy:latest
     - Default port: 11434 (11435 in Docker to avoid conflicts)
@@ -23,15 +23,17 @@ Endpoints implemented:
     POST /api/generate  → translate generate requests to Ask-PanDA RAG
 
 Environment Variables:
-    ASK_PANDA_BASE_URL       - Ask-PanDA server URL (default: http://localhost:8000)
-    OLLAMA_SHIM_MODEL        - Backend model name (default: mistral)
-    OLLAMA_SHIM_MODEL_DISPLAY - Display name for Open WebUI (default: mistral-proxy)
-    OLLAMA_SHIM_PORT         - Port to listen on (default: 11434)
-    OLLAMA_SHIM_VERSION      - Version string (default: v0.0-shim)
+    ASK_PANDA_BASE_URL        - Ask-PanDA server URL (default: http://localhost:8000)
+    OLLAMA_SHIM_MODEL         - Legacy single backend model name (default: mistral)
+    OLLAMA_SHIM_MODEL_DISPLAY - Legacy single display name (default: mistral-proxy)
+    OLLAMA_SHIM_MODELS        - Optional JSON list of {"display": "...", "backend": "..."} entries
+    OLLAMA_SHIM_PORT          - Port to listen on (default: 11434)
+    OLLAMA_SHIM_VERSION       - Version string (default: v0.0-shim)
 """
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -62,22 +64,80 @@ def _utcnow_iso() -> str:
     return _dt.datetime.utcnow().isoformat() + "Z"
 
 
-def _normalize_model_name(model_name: Optional[str]) -> str:
+def _tagged_display(name: str) -> str:
+    """Append :latest to a display name if no explicit tag is present."""
+    return name if ":" in name else f"{name}:latest"
+
+
+def _load_model_registry() -> List[Dict[str, str]]:
     """
-    Strip the :latest or other tags from model names for Ask-PanDA compatibility.
-    Converts 'mistral-proxy:latest' -> 'mistral' using the configured base model.
+    Create a registry of {display, backend} pairs.
+
+    Supports legacy single-model env vars as well as a JSON blob supplied via
+    OLLAMA_SHIM_MODELS. Example value:
+        export OLLAMA_SHIM_MODELS='[
+          {"display": "Mistral-Proxy", "backend": "mistral"},
+          {"display": "Gemini-Proxy", "backend": "gemini"}
+        ]'
     """
+    default = [{"display": OLLAMA_SHIM_MODEL_DISPLAY, "backend": OLLAMA_SHIM_MODEL}]
+    raw = os.getenv("OLLAMA_SHIM_MODELS")
+    if not raw:
+        return default
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("Failed to parse OLLAMA_SHIM_MODELS (%s); falling back to default", exc)
+        return default
+
+    registry: List[Dict[str, str]] = []
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list):
+        logger.warning("OLLAMA_SHIM_MODELS must be a list/dict; falling back to default")
+        return default
+
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        display = entry.get("display") or entry.get("name")
+        backend = entry.get("backend") or entry.get("model")
+        if display and backend:
+            registry.append({"display": str(display), "backend": str(backend)})
+
+    if not registry:
+        logger.warning("OLLAMA_SHIM_MODELS produced no valid entries; using default")
+        return default
+
+    return registry
+
+
+MODEL_REGISTRY = _load_model_registry()
+
+
+def _strip_tag_lower(name: Optional[str]) -> Optional[str]:
+    return name.split(":")[0].lower() if name else None
+
+
+def _resolve_model(model_name: Optional[str]) -> tuple[str, str]:
+    """
+    Return (backend_model, display_name_with_tag) for the requested model.
+    Falls back to the first configured model if no match is found.
+    """
+    default = MODEL_REGISTRY[0]
     if not model_name:
-        return OLLAMA_SHIM_MODEL
+        return default["backend"], _tagged_display(default["display"])
 
-    # Strip any tag (e.g., :latest)
-    base_name = model_name.split(":")[0]
+    requested = _strip_tag_lower(model_name)
+    for entry in MODEL_REGISTRY:
+        display_base = _strip_tag_lower(entry["display"])
+        backend_base = _strip_tag_lower(entry["backend"])
+        if requested in {display_base, backend_base}:
+            return entry["backend"], _tagged_display(entry["display"])
 
-    # If it matches our display name, use the configured backend model
-    if base_name == OLLAMA_SHIM_MODEL_DISPLAY.split(":")[0]:
-        return OLLAMA_SHIM_MODEL
-
-    return base_name
+    logger.info("Unknown model '%s', defaulting to '%s'", model_name, default["display"])
+    return default["backend"], _tagged_display(default["display"])
 
 
 def _extract_user_prompt(messages: List[Dict[str, Any]]) -> str:
@@ -132,21 +192,17 @@ async def list_models() -> Dict[str, Any]:
     """
     Mirror Ollama's /api/tags to satisfy Open WebUI model discovery.
     """
-    # Ensure model name includes :latest tag for compatibility
-    model_name = OLLAMA_SHIM_MODEL_DISPLAY
-    if ":" not in model_name:
-        model_name = f"{model_name}:latest"
-
-    payload = {
-        "models": [
+    models = []
+    for entry in MODEL_REGISTRY:
+        model_name = _tagged_display(entry["display"])
+        models.append(
             {
                 "name": model_name,
                 "model": model_name,
                 "modified_at": _utcnow_iso(),
             }
-        ]
-    }
-    return payload
+        )
+    return {"models": models}
 
 
 @app.get("/api/ps")
@@ -154,13 +210,10 @@ async def list_running_models() -> Dict[str, Any]:
     """
     Report a fake running model list. This is primarily for UI niceties.
     """
-    # Ensure model name includes :latest tag for compatibility
-    model_name = OLLAMA_SHIM_MODEL_DISPLAY
-    if ":" not in model_name:
-        model_name = f"{model_name}:latest"
-
-    payload = {
-        "models": [
+    models = []
+    for entry in MODEL_REGISTRY:
+        model_name = _tagged_display(entry["display"])
+        models.append(
             {
                 "name": model_name,
                 "model": model_name,
@@ -169,9 +222,8 @@ async def list_running_models() -> Dict[str, Any]:
                 "details": {},
                 "expires_at": None,
             }
-        ]
-    }
-    return payload
+        )
+    return {"models": models}
 
 
 @app.get("/api/version")
@@ -200,14 +252,14 @@ async def chat(request: Request) -> JSONResponse:
 
     # Normalize model name (strip :latest tag, map to backend model)
     requested_model = data.get("model")
-    model_id = _normalize_model_name(requested_model)
+    model_id, resolved_display = _resolve_model(requested_model)
 
     ask_payload = {"question": prompt, "model": model_id}
     ask_response = await _call_ask_panda(ASK_PANDA_AGENT_ENDPOINT, ask_payload)
 
     answer = ask_response.get("answer", "")
     response_body = {
-        "model": requested_model or OLLAMA_SHIM_MODEL_DISPLAY,
+        "model": requested_model or resolved_display,
         "created_at": _utcnow_iso(),
         "message": {"role": "assistant", "content": answer},
     }
@@ -227,14 +279,14 @@ async def generate(request: Request) -> JSONResponse:
 
     # Normalize model name (strip :latest tag, map to backend model)
     requested_model = data.get("model")
-    model_id = _normalize_model_name(requested_model)
+    model_id, resolved_display = _resolve_model(requested_model)
 
     ask_payload = {"question": prompt, "model": model_id}
     ask_response = await _call_ask_panda(ASK_PANDA_RAG_ENDPOINT, ask_payload)
 
     answer = ask_response.get("answer", "")
     response_body = {
-        "model": requested_model or OLLAMA_SHIM_MODEL_DISPLAY,
+        "model": requested_model or resolved_display,
         "created_at": _utcnow_iso(),
         "response": answer,
         "done": True,
