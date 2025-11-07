@@ -75,6 +75,7 @@ class TaskStatusAgent:
         """
         self.model = model  # e.g., OpenAI or Anthropic wrapper
         self.query_type = query_type
+        self.last_error: str | None = None
         try:
             self.taskid = int(taskid)  # PanDA task ID for the analysis
         except ValueError:
@@ -183,6 +184,7 @@ class TaskStatusAgent:
             File dictionary (dict): A dictionary containing the file names and their corresponding paths.
             Metadata dictionary (dict): A dictionary containing the relevant metadata for the task.
         """
+        self.last_error = None
         _metadata_dictionary = {}
         _file_dictionary = {}
 
@@ -196,6 +198,7 @@ class TaskStatusAgent:
         metadata_success, metadata_message = fetch_data(self.taskid, filename="metadata.json", jsondata=True, workdir=workdir, url=url)
 
         if metadata_success != 0:
+            self.last_error = f"Task {self.taskid} metadata could not be retrieved from PanDA."
             logger.warning(f"Failed to fetch metadata for task {self.taskid} - will not be able to analyze the task status")
             return EC_NOTFOUND, _file_dictionary, _metadata_dictionary
 
@@ -204,11 +207,16 @@ class TaskStatusAgent:
 
         task_data = read_json_file(metadata_message)
         if not task_data:
+            self.last_error = f"Task {self.taskid} metadata file was empty or unreadable."
             logger.warning(f"Error: Failed to read the JSON data from {metadata_message}.")
             return EC_UNKNOWN_ERROR, None, None
 
         # For job queries, check if the 'jobs' key exists and is not empty
         if self.query_type == "job" and (not task_data.get("jobs")):
+            self.last_error = (
+                f"Task {self.taskid} contains no jobs. "
+                "The PanDA monitor returned an empty job list for this task ID."
+            )
             logger.warning(f"No jobs found for jeditaskid {self.taskid}")
             return EC_NOTFOUND, _file_dictionary, _metadata_dictionary
 
@@ -286,14 +294,17 @@ Return only a valid Python dictionary. Here's the metadata dictionary:
         logger.info(f"metadata_dictionary: {metadata_dictionary}")
 
         if exit_code == EC_NOTFOUND:
-            logger.warning(
-                f"No metadata found for task {self.taskid}")
+            if not self.last_error:
+                self.last_error = f"No metadata found for task {self.taskid}."
+            logger.warning(self.last_error)
             return None  # Return None instead of crashing
         elif not file_dictionary:
-            logger.warning(f"Error: Failed to metadata files for PandaID {self.taskid}.")
+            self.last_error = f"Failed to download metadata files for task {self.taskid}."
+            logger.warning(self.last_error)
             return None  # Return None instead of crashing
-        elif not metadata_dictionary: # Add check for empty metadata dictionary
-            logger.warning(f"Error: Metadata dictionary is empty for PandaID {self.taskid}.")
+        elif not metadata_dictionary:  # Add check for empty metadata dictionary
+            self.last_error = f"Metadata dictionary is empty for task {self.taskid}."
+            logger.warning(self.last_error)
             return None
 
         # Formulate the question based on the extracted lines and metadata

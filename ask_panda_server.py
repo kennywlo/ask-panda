@@ -608,7 +608,10 @@ async def agent_ask(request: QuestionRequest) -> dict[str, str]:
             entity_type = "Job" if id_type == "job" else "Task"
             question = agent.generate_question()
             if question is None:
-                return {"answer": f"Error: {entity_type} {agent.taskid} not found. Please verify the {id_type} ID is correct.", "category": routed_category}
+                error_detail = getattr(agent, "last_error", None)
+                if not error_detail:
+                    error_detail = f"{entity_type} {agent.taskid} not found. Please verify the {id_type} ID is correct."
+                return {"answer": f"Error: {error_detail}", "category": routed_category}
             answer = agent.ask(question)
         else:
             logger.warning(f"Unhandled category: {category}")
