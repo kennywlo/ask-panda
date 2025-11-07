@@ -6,19 +6,29 @@ AskPanDA is an intelligent assistant system for the PanDA (Production and Distri
 
 ## Overview
 
-AskPanDA is a multi-agent LLM-powered system that can answer questions about:
+AskPanDA is a layered LLM-powered system that can answer questions about:
 - PanDA documentation and concepts
 - Real-time task status and metadata
 - Job failure analysis and debugging
 
 ## Architecture
 
-AskPanDA uses a multi-agent architecture with the following components:
+AskPanDA combines a FastAPI MCP service with a shared client/router layer so every entry point (CLI, Open WebUI, or the Ollama shim) behaves identically.
 
-### Selection Agent
-Automatically routes user queries to the appropriate specialized agent based on the question type. Uses both rule-based classification and LLM-based classification for robustness.
+### FastAPI MCP Server
+- Hosts `/rag_ask` (retrieval augmented), `/llm_ask` (direct LLM), `/agent_ask` (auto-routing), and `/health`
+- Maintains the ChromaDB vector store and periodically refreshes it when files in `resources/` change
+- Executes the asynchronous agent implementations (document, data/task, log) and selection logic
 
-### Document Query Agent
+### Client Routing Layer
+- Lives in `clients/` (Selection, DocumentQuery, TaskStatus, LogAnalysis, etc.)
+- All clients call the FastAPI server via HTTP and share a cache directory (set `ASK_PANDA_CACHE_DIR` or default `./cache`)
+- Used by CLI scripts and by the Open WebUI adapters so that desktop and web demos stay in sync
+
+### Selection (Client + Server)
+Combines quick heuristics with LLM classification to route each question to the right capability. The router keeps track of previous turns so raw IDs (“47250094”) can be disambiguated.
+
+### Document Query (RAG)
 Handles general questions about PanDA using Retrieval-Augmented Generation (RAG). This agent:
 - Uses ChromaDB vector store with sentence transformers for semantic search
 - Indexes documentation from multiple sources (PanDA, Rucio, pilots, etc.)
@@ -30,7 +40,7 @@ Provides real-time information about PanDA tasks by:
 - Analyzing task status, job counts, and error diagnostics
 - Presenting structured information about task execution
 
-### Log Analysis Agent
+### Log Analysis
 Performs intelligent analysis of failed jobs by:
 - Downloading relevant log files from PanDA
 - Extracting error messages and diagnostics
@@ -65,9 +75,12 @@ curl -X POST "http://localhost:8000/agent_ask" \
   -d '{"question": "Your question here", "model": "mistral"}'
 ```
 
+`/llm_ask` is available when you already have context and simply need to hit a specific foundation model without RAG.
+
 ### Supported Models
-- Mistral (mistral-small-latest by default) - Primary model
-- Gemini (gemini-2.0-flash) - Optional backup when quota allows
+- Mistral (`mistral-small-latest` by default, overridable via `MISTRAL_MODEL`)
+- Gemini (`models/gemini-2.0-flash`) – optional backup when quota allows
+- Anthropic / OpenAI / local Llama via the same helper methods
 
 ### Example Queries
 
@@ -94,6 +107,7 @@ curl -X POST "http://localhost:8000/agent_ask" \
 - Embedding Model: all-MiniLM-L6-v2 (sentence transformers)
 - Auto-updates when documentation files change
 - Stores embeddings for semantic similarity search
+- Background refresh interval: ~60 seconds, guarded by locks so queries keep working during updates
 
 ### Performance
 - Document queries: < 5 seconds
@@ -102,6 +116,7 @@ curl -X POST "http://localhost:8000/agent_ask" \
 
 ### Infrastructure
 - Containerized deployment using Docker Compose
+- `ask-panda` service (FastAPI) + `ollama-shim` (Open WebUI bridge)
 - Persistent vector store for embeddings
 - Health monitoring endpoint at `/health`
 - API documentation at `/docs`
@@ -140,8 +155,9 @@ curl -X POST "http://localhost:8000/agent_ask" \
 AskPanDA is developed as part of the PanDA project and uses:
 - FastAPI for the REST API
 - ChromaDB for vector storage
-- Google Gemini API for LLM inference
+- Google Gemini & Mistral SDKs for LLM inference
 - FastMCP for agent orchestration
+- Shared `clients/` package to keep the CLI and Open WebUI adapters aligned with upstream AskPanDA
 
 ## Support
 
@@ -153,7 +169,7 @@ For questions or issues with AskPanDA:
 ## Version History
 
 AskPanDA continues to evolve with new features:
-- Multi-agent architecture with intelligent routing
+- Layered server + client architecture with intelligent routing
 - RAG-based documentation retrieval
 - Real-time BigPanda API integration
 - Automated log analysis with expert guidance

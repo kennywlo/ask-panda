@@ -16,6 +16,7 @@
 - [ ] Check logs for any warnings: `docker compose logs ask-panda --tail=100`
 - [ ] Restart containers before demo to clear any accumulated state
 - [ ] Have Docker images pre-built (no building during demo)
+- [ ] Confirm `ASK_PANDA_CACHE_DIR` (defaults to `./cache`) points to fast local storage so Selection clients in both CLI and Open WebUI share context
 
 ### 3. Demo Environment
 - [ ] Run on local laptop (not dependent on external servers)
@@ -25,6 +26,13 @@
 - [ ] Close unnecessary applications (free up RAM)
 
 ## Recommended Demo Flow
+
+### Architecture Snapshot (set the stage in <30 s)
+- FastAPI MCP server (`ask_panda_server.py`) exposes `/rag_ask`, `/llm_ask`, `/agent_ask`.
+- Shared clients (`clients/selection.py`, `document_query.py`, etc.) route every question, whether it originates from CLI scripts or Open WebUI.
+- Ollama shim simply re-labels `/agent_ask` as `mistral-proxy` for Open WebUI.
+
+This talking point explains why the demo survives upstream merges and how each surface (CLI, WebUI, APIs) stays consistent.
 
 ### Opening (1-2 min)
 ```bash
@@ -157,7 +165,7 @@ echo -e "\n=== All checks complete ==="
 ## Talking Points
 
 ### Technical Highlights
-- **Multi-Agent Architecture**: Automatic routing between document/task/log_analyzer agents
+- **Layered Architecture**: FastAPI MCP server + shared client/router layer + Open WebUI shim stay in lockstep with upstream AskPanDA
 - **Hybrid Approach**: Rule-based + LLM classification for robustness
 - **RAG System**: ChromaDB vector store with 5 indexed documents
 - **Live Data Integration**: Real-time task metadata from BigPanda
@@ -182,6 +190,7 @@ echo -e "\n=== All checks complete ==="
 **30 minutes before:**
 - [ ] Restart Docker containers
 - [ ] Run performance monitoring script
+- [ ] Run `./test_agent_queries.sh` (documents/tasks/logs) in addition to `./final_test.sh`
 - [ ] Test all demo queries
 - [ ] Check API quotas/rate limits
 - [ ] Verify display output on projector

@@ -21,6 +21,27 @@ chatbot eventually.
 - **User-Friendly**: Simple command-line interface for easy interaction.
 - **Lightweight**: Minimal dependencies for quick setup and deployment.
 - **Open Source**: Built with transparency in mind, allowing for community contributions and improvements.
+- **Shared Client Stack**: A common `clients/` package (Selection, DocumentQuery, TaskStatus, LogAnalysis) now powers both the CLI tools and the Open WebUI adapters, matching the upstream repository layout for easier syncing.
+- **Direct + RAG Modes**: The FastAPI service exposes `/rag_ask` (retrieval augmented) and `/llm_ask` (direct model access) so downstream tooling can choose what makes sense per query.
+
+# Architecture Overview
+
+Ask PanDA now mirrors the upstream “clients + server” structure so future pulls stay conflict-free while the demo keeps its richer behavior.
+
+1. **FastAPI MCP server (`ask_panda_server.py`)**
+   - Hosts `/rag_ask`, `/llm_ask`, `/agent_ask`, and `/health`
+   - Manages the ChromaDB vector store (auto-refreshes when `resources/` changes)
+   - Owns the async agent implementations (Document/Task/Log) and selection logic
+   - Talks directly to SDKs (Mistral, Gemini, Anthropic, OpenAI, local Llama) with timeouts/retries
+2. **Client/router layer (`clients/`)**
+   - `Selection`, `DocumentQuery`, `TaskStatus`, `LogAnalysis`, `CRICanalysis`, etc. are thin HTTP helpers
+   - All clients share the same cache directory (set `ASK_PANDA_CACHE_DIR` or default `./cache`)
+   - CLI scripts and Open WebUI pipes call these clients so behavior stays identical inside and outside Docker
+3. **UI & Shim adapters**
+   - `open-webui/*.py` pipes call the shared clients, suppress Open WebUI follow-up prompts, and normalize sessions
+   - `ollama_shim.py` re-exposes `/agent_ask` as an Ollama-compatible `/api/chat` endpoint for Open WebUI
+
+This layered approach means you can iterate on the FastAPI server or the UI independently, and merging upstream changes is now mostly a matter of syncing the `clients/` folder.
 
 # Installation
 
@@ -80,6 +101,8 @@ docker compose down
 - `11434` - Local Ollama server (if running)
 - `11435` - Ollama shim Docker container
 
+If you need the Ask PanDA cache somewhere else (e.g., to share across runs), set `ASK_PANDA_CACHE_DIR=/path/to/cache` in your shell or `.env` before launching Docker or the CLI tools.
+
 # Environment Variables
 Ensure that at least one of these keys are set in your environment for secure API access, and select the
 model accordingly (see below):
@@ -133,6 +156,13 @@ print(answer)
 
 The agent returns the answer as a dictionary.
 
+Tip: The shared clients can now be imported the same way:
+```python
+from clients.document_query import DocumentQuery
+doc = DocumentQuery(model="mistral", session_id="demo")
+print(doc.ask("What is PanDA?"))
+```
+
 # Log Analysis Agent
 
 1. Start the Server as described above.
@@ -162,6 +192,14 @@ The following pilot error codes have been verified to work with the error analys
 ```
 1099, 1104, 1137, 1150, 1152, 1201, 1213, 1235, 1236, 1305, 1322, 1324, 1354, 1361, 1368.
 ```
+
+# Testing and Monitoring
+
+- `final_test.sh` exercises the Open WebUI ↔ Ollama shim ↔ FastAPI stack end-to-end.
+- `test_agent_queries.sh` hammers `/agent_ask` directly to make sure document, task, and log questions route correctly (set `BASE_URL` if you’re not on localhost).
+- `pre_demo_check.sh` verifies the vector store, Docker health checks, and disk space before a live run.
+
+Run these scripts whenever you rebase with upstream master to ensure the shared client/server layers remain compatible.
 
 #   Data Query Agent
 
