@@ -5,15 +5,25 @@ This pipe calls the ask-panda HTTP API instead of importing Python code directly
 Much simpler and avoids dependency conflicts!
 """
 
-from typing import Any, List, Dict
-from pydantic import BaseModel, Field
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import Any, Dict, List, Optional
+
 import requests
+from pydantic import BaseModel, Field
+
+
+DEFAULT_ASK_PANDA_URL = os.getenv(
+    "ASK_PANDA_API_URL", "http://localhost:8000/agent_ask"
+)
 
 
 class Pipe:
     class Valves(BaseModel):
         ask_panda_url: str = Field(
-            default="http://localhost:8000/agent_ask",
+            default=DEFAULT_ASK_PANDA_URL,
             description="Ask PanDA endpoint",
         )
         model: str = Field(
@@ -21,24 +31,79 @@ class Pipe:
             description="LLM model",
         )
 
+    class UserValves(BaseModel):
+        show_status: bool = Field(
+            default=True, description="Emit progress updates back to Open WebUI"
+        )
+
     def __init__(self):
         self.name = "Ask PanDA"
         self.valves = self.Valves()
 
-    def pipe(
+    async def pipe(
         self,
-        user_message: str,
-        model_id: str,
-        messages: List[Dict[str, Any]],
         body: Dict[str, Any],
-    ) -> str:
+        __user__: Optional[Dict[str, Any]] = None,
+        __event_emitter__: Optional[Any] = None,
+        __event_call__: Optional[str] = None,
+    ) -> str | Dict[str, Any]:
+        if __event_call__ in {"follow_ups", "followups", "title", "notes"}:
+            return {"follow_ups": []}
+
+        prompt = self._extract_last_user_prompt(body.get("messages") or [])
+        if not prompt:
+            return "No user prompt provided."
+
+        user_valves_data = (__user__ or {}).get("valves") or {}
         try:
-            r = requests.post(
-                self.valves.ask_panda_url,
-                json={"question": user_message, "model": self.valves.model},
-                timeout=90,
+            user_valves = self.UserValves(**user_valves_data)
+        except Exception:
+            user_valves = self.UserValves()
+
+        if user_valves.show_status and __event_emitter__:
+            await __event_emitter__(
+                {
+                    "type": "status",
+                    "data": {"description": "Contacting Ask PanDA…", "done": False},
+                }
             )
-            r.raise_for_status()
-            return r.json().get("answer", "No answer")
-        except Exception as e:
-            return f"Error: {e}"
+
+        payload = {"question": prompt, "model": self.valves.model}
+        try:
+            data = await asyncio.to_thread(
+                self._call_ask_panda, self.valves.ask_panda_url, payload
+            )
+        except Exception as exc:  # noqa: BLE001
+            if user_valves.show_status and __event_emitter__:
+                await __event_emitter__(
+                    {
+                        "type": "status",
+                        "data": {"description": "Ask PanDA error", "done": True},
+                    }
+                )
+            return f"Error contacting Ask PanDA: {exc}"
+
+        if user_valves.show_status and __event_emitter__:
+            await __event_emitter__(
+                {
+                    "type": "status",
+                    "data": {"description": "Ask PanDA response ready", "done": True},
+                }
+            )
+
+        return data.get("answer", "No answer provided.")
+
+    @staticmethod
+    def _extract_last_user_prompt(messages: List[Dict[str, Any]]) -> str:
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content.strip()
+        return ""
+
+    @staticmethod
+    def _call_ask_panda(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        response = requests.post(url, json=payload, timeout=90)
+        response.raise_for_status()
+        return response.json()

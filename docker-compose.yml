@@ -84,6 +84,7 @@ services:
     environment:
       - OLLAMA_BASE_URL=http://ollama-shim:11434
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-ask-panda-dev-secret}
+      - ASK_PANDA_API_URL=http://ask-panda:8000/agent_ask
       - ASK_PANDA_FUNCTION_ID=ask_panda_api_pipe
       - ASK_PANDA_FUNCTION_NAME=Ask PanDA
       - ASK_PANDA_FUNCTION_DESCRIPTION=Ask PanDA Ask/RAG pipe for the MCP stack
