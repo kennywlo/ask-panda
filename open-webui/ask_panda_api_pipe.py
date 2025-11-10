@@ -15,9 +15,18 @@ import requests
 from pydantic import BaseModel, Field
 
 
-DEFAULT_ASK_PANDA_URL = os.getenv(
-    "ASK_PANDA_API_URL", "http://localhost:8000/agent_ask"
-)
+def _resolve_default_api_url() -> str:
+    """Prefer explicit env vars but fall back to the Docker network hostname."""
+    explicit = os.getenv("ASK_PANDA_API_URL")
+    if explicit:
+        return explicit
+    base = os.getenv("ASK_PANDA_BASE_URL")
+    if base:
+        return f"{base.rstrip('/')}/agent_ask"
+    return "http://ask-panda:8000/agent_ask"
+
+
+DEFAULT_ASK_PANDA_URL = _resolve_default_api_url()
 
 
 class Pipe:
@@ -37,7 +46,7 @@ class Pipe:
         )
 
     def __init__(self):
-        self.name = "Ask PanDA"
+        self.name = "AskPanDA Agent"
         self.valves = self.Valves()
 
     async def pipe(

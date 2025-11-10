@@ -32,7 +32,7 @@ from open_webui.utils.plugin import (  # type: ignore
 
 
 FUNCTION_ID = os.environ.get("ASK_PANDA_FUNCTION_ID", "ask_panda_api_pipe")
-FUNCTION_NAME = os.environ.get("ASK_PANDA_FUNCTION_NAME", "Ask PanDA")
+FUNCTION_NAME = os.environ.get("ASK_PANDA_FUNCTION_NAME", "AskPanDA Agent")
 FUNCTION_DESCRIPTION = os.environ.get(
     "ASK_PANDA_FUNCTION_DESCRIPTION",
     "Routes prompts to the Ask PanDA MCP server via its HTTP API.",
