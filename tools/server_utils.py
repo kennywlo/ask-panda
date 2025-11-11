@@ -32,6 +32,34 @@ MISTRAL_API_URL: str = "https://api.mistral.ai/v1/chat/completions"
 MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
 LLAMA_API_URL: str = os.getenv("LLAMA_API_URL", "http://192.168.100.97:11434/api/generate")
 LLAMA_MODEL: str = os.getenv("LLAMA_MODEL", "gpt-oss:20b")
+AUTO_MODEL_ALIASES = {"auto", "default", "failover", "hybrid"}
+SUPPORTED_MODELS = {
+    "mistral",
+    "anthropic",
+    "openai",
+    "llama",
+    "gpt-oss:20b",
+    "gemini",
+}
+
+
+def _parse_model_priority() -> list[str]:
+    raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "mistral,gpt-oss:20b")
+    priority = []
+    for entry in raw.split(","):
+        model = entry.strip().lower()
+        if not model:
+            continue
+        if model not in SUPPORTED_MODELS:
+            logger.warning("Ignoring unsupported model '%s' in ASK_PANDA_MODEL_PRIORITY", model)
+            continue
+        priority.append(model)
+    if not priority:
+        priority = ["mistral", "gpt-oss:20b"]
+    return priority
+
+
+MODEL_PRIORITY = _parse_model_priority()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -123,6 +151,44 @@ def call_ollama_direct(prompt: str, timeout: int = 120) -> str:
         return data.get("response", "")
     except ValueError as exc:
         return f"Error: Unexpected response format from Ollama - {exc}"
+
+
+def _resolve_model_sequence(model: str) -> list[str]:
+    normalized = (model or "").lower().strip()
+    if not normalized:
+        return []
+    if normalized in AUTO_MODEL_ALIASES:
+        return MODEL_PRIORITY
+    if normalized not in SUPPORTED_MODELS:
+        return []
+    return [normalized]
+
+
+def call_model_with_failover(model: str, prompt: str) -> str:
+    """
+    Attempt to call the requested model, falling back according to configured priority.
+    """
+    sequence = _resolve_model_sequence(model)
+    if not sequence:
+        return f"Error: Unsupported model '{model}'"
+
+    last_error = None
+    for candidate in sequence:
+        if candidate == "mistral":
+            result = call_mistral_direct(prompt)
+        elif candidate in {"llama", "gpt-oss:20b"}:
+            result = call_ollama_direct(prompt)
+        else:
+            # For models that aren't handled synchronously here (anthropic, openai, gemini),
+            # we simply skip because those are only called asynchronously inside the server.
+            continue
+
+        if isinstance(result, str) and result.strip().lower().startswith("error:"):
+            last_error = result
+            continue
+        return result
+
+    return last_error or "Error: All configured models failed."
 
 
 def check_server_health() -> int:

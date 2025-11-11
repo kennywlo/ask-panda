@@ -36,8 +36,8 @@ class Pipe:
             description="Ask PanDA endpoint",
         )
         model: str = Field(
-            default="gpt-oss:20b",
-            description="LLM model",
+            default="auto",
+            description="LLM model (use 'auto' for failover between Mistral and gpt-oss:20b)",
         )
 
     class UserValves(BaseModel):

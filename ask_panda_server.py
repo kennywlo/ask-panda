@@ -61,7 +61,7 @@ from mistralai import Mistral
 # from langchain_huggingface import HuggingFaceEmbeddings
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Optional  # For type hinting
+from typing import List, Optional  # For type hinting
 
 from agents.document_query_agent import DocumentQueryAgent
 from tools.tools import get_vectorstore_manager, Timer
@@ -110,6 +110,35 @@ LLAMA_API_URL: Optional[str] = os.getenv(
 )
 LLAMA_MODEL: str = os.getenv("LLAMA_MODEL", "gpt-oss:20b")
 MISTRAL_API_KEY: Optional[str] = os.getenv("MISTRAL_API_KEY")
+AUTO_MODEL_ALIASES = {"auto", "default", "failover", "hybrid"}
+SUPPORTED_MODELS = {
+    "mistral",
+    "anthropic",
+    "openai",
+    "llama",
+    "gpt-oss:20b",
+    "gemini",
+}
+
+
+def _parse_model_priority() -> list[str]:
+    raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "mistral,gpt-oss:20b")
+    priority = []
+    for entry in raw.split(","):
+        model = entry.strip().lower()
+        if not model:
+            continue
+        if model not in SUPPORTED_MODELS:
+            logger.warning("Ignoring unsupported model '%s' in ASK_PANDA_MODEL_PRIORITY", model)
+            continue
+        priority.append(model)
+    # Ensure there is at least one sane fallback chain
+    if not priority:
+        priority = ["mistral", "gpt-oss:20b"]
+    return priority
+
+
+MODEL_PRIORITY = _parse_model_priority()
 
 # Configure SDKs - these operations might implicitly use the API keys above
 # or might be for libraries that don't require explicit key passing at every call.
@@ -423,6 +452,52 @@ class PandaMCP(FastMCP):
                 return f"Error interacting with Gemini API: Google API error - {e}"
             return f"An unexpected error occurred with Gemini API: {e}"
 
+    def _resolve_model_sequence(self, requested_model: str) -> list[str]:
+        model = (requested_model or "").lower().strip()
+        if not model:
+            return []
+        if model in AUTO_MODEL_ALIASES:
+            return MODEL_PRIORITY
+        if model not in SUPPORTED_MODELS:
+            return []
+        return [model]
+
+    async def _call_backend_model(self, prompt: str, model: str) -> str:
+        if model == "anthropic":
+            return await self._call_anthropic(prompt)
+        if model == "openai":
+            return await self._call_openai(prompt)
+        if model == "gemini":
+            return await self._call_gemini(prompt)
+        if model == "mistral":
+            return await self._call_mistral(prompt)
+        if model == "gpt-oss:20b":
+            return await self._call_llama(prompt, "gpt-oss:20b")
+        if model == "llama":
+            return await self._call_llama(prompt)
+        raise ValueError(f"Unsupported model '{model}'")
+
+    async def _dispatch_with_failover(self, prompt: str, requested_model: str) -> str:
+        sequence = self._resolve_model_sequence(requested_model)
+        if not sequence:
+            return f"Invalid model specified: '{requested_model}'."
+
+        last_error: Optional[str] = None
+        for candidate in sequence:
+            try:
+                response = await self._call_backend_model(prompt, candidate)
+                if isinstance(response, str) and response.strip().lower().startswith("error:"):
+                    raise RuntimeError(response)
+                return response
+            except Exception as exc:
+                logger.warning(
+                    "Model '%s' failed (%s). Trying next fallback.", candidate, exc
+                )
+                last_error = str(exc)
+                continue
+
+        return f"Error: All configured models failed. Last error: {last_error or 'unknown'}"
+
     async def rag_query(self, question: str, model: str) -> str:
         """
         Perform a RAG query: retrieve context, then call the specified LLM.
@@ -454,20 +529,7 @@ class PandaMCP(FastMCP):
         system_identity = "You are AskPanDA, an intelligent assistant for the PanDA (Production and Distributed Analysis) workload management system. You help users with questions about PanDA documentation, task status, and job failures."
         prompt = f"{system_identity}\n\nAnswer based on the following context:\n{context}\n\nQuestion: {question}"
 
-        # Call appropriate LLM based on provided model
-        if model == "anthropic":
-            return await self._call_anthropic(prompt)
-        if model == "openai":
-            return await self._call_openai(prompt)
-        if model in {"llama", "gpt-oss:20b"}:
-            override = None if model == "llama" else model
-            return await self._call_llama(prompt, override)
-        if model == "gemini":
-            return await self._call_gemini(prompt)
-        if model == "mistral":
-            return await self._call_mistral(prompt)
-
-        return f"Invalid model specified: '{model}'."
+        return await self._dispatch_with_failover(prompt, model)
 
 
 class QuestionRequest(BaseModel):
@@ -535,21 +597,8 @@ async def llm_ask(request: QuestionRequest) -> dict[str, str]:
     """
     logger.info(f"Direct LLM query using model: '{request.model}'")
 
-    # Call LLM directly without RAG
     model = request.model.lower()
-    if model == "gemini":
-        response_text = await mcp._call_gemini(request.question)
-    elif model == "anthropic":
-        response_text = await mcp._call_anthropic(request.question)
-    elif model == "openai":
-        response_text = await mcp._call_openai(request.question)
-    elif model in {"llama", "gpt-oss:20b"}:
-        override = None if model == "llama" else model
-        response_text = await mcp._call_llama(request.question, override)
-    elif model == "mistral":
-        response_text = await mcp._call_mistral(request.question)
-    else:
-        response_text = f"Unsupported model: {model}"
+    response_text = await mcp._dispatch_with_failover(request.question, model)
 
     logger.info(f"Direct LLM query processed using model '{model}'.")
     return {"answer": response_text}

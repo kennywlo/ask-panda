@@ -64,10 +64,10 @@ docker compose up -d
 
 This will start two services:
 - **ask-panda**: Main server on port 8001 (external) → 8000 (internal)
-  - Uses the remote Ollama-hosted `gpt-oss:20b` model by default
+  - Uses automatic failover (Mistral first, then the remote `gpt-oss:20b`) when `model=auto`
   - Includes RAG with vector store for PanDA documentation
 - **ollama-shim**: Ollama-compatible API on port 11435 (external) → 11434 (internal)
-  - Exposes `gpt-oss:20b-proxy:latest` model
+  - Exposes `askpanda-auto:latest`, which maps to the server’s failover mode
   - Forwards requests to Ask-PanDA's RAG endpoint
   - Avoids conflict with localhost Ollama on port 11434
 
@@ -109,6 +109,13 @@ export OPENAI_API_KEY='your_openai_api_key'
 export GEMINI_API_KEY='your_gemini_api_key'
 export LLAMA_API_URL='http://192.168.100.97:11434/api/generate'  # Remote Ollama (gpt-oss)
 export LLAMA_MODEL='gpt-oss:20b'
+export ASK_PANDA_MODEL_PRIORITY='mistral,gpt-oss:20b'  # Ordered failover list used when model=auto
+
+## Model Failover & Quick Switching
+
+- Use `model=auto` (default in the Open WebUI pipe and Ollama shim) to try Mistral first and automatically fall back to the local `gpt-oss:20b` server whenever the primary API is throttled.
+- Change the order instantly by setting `ASK_PANDA_MODEL_PRIORITY`. Example: `ASK_PANDA_MODEL_PRIORITY='gpt-oss:20b,mistral'` makes the local model primary but keeps Mistral as a backup.
+- You can still force a specific backend by sending `model=mistral`, `model=gpt-oss:20b`, etc. – only the `auto` alias enables failover.
 ```
 
 # MCP server and Document Queries
@@ -139,7 +146,7 @@ python3 -m clients.document_query  --question="What is PanDA?" --model=openai --
 python3 -m clients.document_query  --question="How does the PanDA pilot work?" --model=anthropic --session-id=222
 python3 -m clients.document_query  --question="What is the purpose of the PanDA server?" --model=llama --session-id=333
 python3 -m clients.document_query  --question="What is the PanDA WMS?" --model=gemini --session-id=444 (shows that PanDA WMS is not properly defined)
-python3 -m clients.document_query  --question="Show me the latest pilot activity overview." --model=gpt-oss:20b --session-id=555
+python3 -m clients.document_query  --question="Show me the latest pilot activity overview." --model=auto --session-id=555  # auto = try Mistral then gpt-oss:20b
 python3 -m clients.document_query  --question="Please list all of the PanDA pilot error codes" --model=gemini --session-id=555 (demonstration of the limitations of the size of the context window)
 ```
 
@@ -298,7 +305,7 @@ The Ollama shim is included in the Docker Compose setup and runs on port 11435 (
 
 **Configuration:**
 - Port 11435 (external) → 11434 (internal container)
-- Uses the Ollama-hosted `gpt-oss:20b` model
+- Uses the Ask-PanDA failover mode (`auto`) which prefers Mistral and falls back to `gpt-oss:20b`
 - Automatically connects to Ask-PanDA service via Docker network
 
 **Setup for Open WebUI:**
@@ -312,11 +319,11 @@ The Ollama shim is included in the Docker Compose setup and runs on port 11435 (
    - For Docker Open WebUI: Set `OLLAMA_BASE_URL=http://host.docker.internal:11435`
    - For local Open WebUI: Set `OLLAMA_BASE_URL=http://localhost:11435`
 
-3. The model `gpt-oss:20b-proxy:latest` will appear in the model picker
+3. The model `askpanda-auto:latest` will appear in the model picker
 
 **Model Configuration:**
 - The shim currently uses the `/rag_ask` endpoint for better performance
-- Uses the remote `gpt-oss:20b` model (configured in `ask_panda_server.py`)
+- Uses the remote `gpt-oss:20b` model as the fallback target (configured in `ask_panda_server.py`)
 - Responses include RAG-enhanced context from your documentation
 
 ### Standalone Deployment
@@ -332,8 +339,8 @@ requests to the Ask PanDA HTTP API.
 
 **Environment variables:**
 - `ASK_PANDA_BASE_URL` (default `http://localhost:8000`) – base URL for the Ask PanDA server
-- `OLLAMA_SHIM_MODEL` (default `gpt-oss:20b`) – backend model name
-- `OLLAMA_SHIM_MODEL_DISPLAY` (default `gpt-oss:20b-proxy`) – model name shown in Open WebUI
+- `OLLAMA_SHIM_MODEL` (default `auto`) – backend model name (failover)
+- `OLLAMA_SHIM_MODEL_DISPLAY` (default `askpanda-auto`) – model name shown in Open WebUI
 - `OLLAMA_SHIM_PORT` (default `11434`) – port to listen on
 
 **Note:** When running standalone, ensure your MISTRAL_API_KEY is set in the environment.

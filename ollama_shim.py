@@ -11,8 +11,8 @@ Mistral API (or any other LLM provider configured inside Ask-PanDA).
 
 Default Configuration:
     - Backend: Ask-PanDA agent endpoint (`/agent_ask`) for chat
-    - LLM: Ollama-accessible `gpt-oss:20b`
-    - Model exposed: gpt-oss:20b-proxy:latest
+    - LLM: Failover via Ask-PanDA (`auto` → Mistral then gpt-oss:20b)
+    - Model exposed: askpanda-auto:latest
     - Default port: 11434 (11435 in Docker to avoid conflicts)
 
 Endpoints implemented:
@@ -24,8 +24,8 @@ Endpoints implemented:
 
 Environment Variables:
     ASK_PANDA_BASE_URL        - Ask-PanDA server URL (default: http://localhost:8000)
-    OLLAMA_SHIM_MODEL         - Legacy single backend model name (default: gpt-oss:20b)
-    OLLAMA_SHIM_MODEL_DISPLAY - Legacy single display name (default: gpt-oss:20b-proxy)
+    OLLAMA_SHIM_MODEL         - Legacy single backend model name (default: auto)
+    OLLAMA_SHIM_MODEL_DISPLAY - Legacy single display name (default: askpanda-auto)
     OLLAMA_SHIM_MODELS        - Optional JSON list of {"display": "...", "backend": "..."} entries
     OLLAMA_SHIM_PORT          - Port to listen on (default: 11434)
     OLLAMA_SHIM_VERSION       - Version string (default: v0.0-shim)
@@ -53,7 +53,7 @@ ASK_PANDA_BASE_URL = os.getenv("ASK_PANDA_BASE_URL", "http://localhost:8000")
 ASK_PANDA_AGENT_ENDPOINT = f"{ASK_PANDA_BASE_URL.rstrip('/')}/agent_ask"
 ASK_PANDA_RAG_ENDPOINT = f"{ASK_PANDA_BASE_URL.rstrip('/')}/rag_ask"
 
-OLLAMA_SHIM_MODEL = os.getenv("OLLAMA_SHIM_MODEL", "gpt-oss:20b")
+OLLAMA_SHIM_MODEL = os.getenv("OLLAMA_SHIM_MODEL", "auto")
 OLLAMA_SHIM_MODEL_DISPLAY = os.getenv(
     "OLLAMA_SHIM_MODEL_DISPLAY", f"{OLLAMA_SHIM_MODEL}-proxy"
 )

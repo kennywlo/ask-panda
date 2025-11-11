@@ -37,6 +37,7 @@ services:
       - LLAMA_API_URL=${LLAMA_API_URL:-}
       - INTERNAL_API_URL=http://ask-panda:8000/rag_ask
       - MCP_SERVER_URL=http://localhost:8000
+      - ASK_PANDA_MODEL_PRIORITY=${ASK_PANDA_MODEL_PRIORITY:-mistral,gpt-oss:20b}
     networks:
       - ask-panda-network
     restart: unless-stopped
@@ -58,8 +59,8 @@ services:
     environment:
       # Point to the ask-panda service in the Docker network
       - ASK_PANDA_BASE_URL=http://ask-panda:8000
-      - OLLAMA_SHIM_MODEL=${OLLAMA_SHIM_MODEL:-gpt-oss:20b}
-      - OLLAMA_SHIM_MODEL_DISPLAY=${OLLAMA_SHIM_MODEL_DISPLAY:-gpt-oss:20b-proxy}
+      - OLLAMA_SHIM_MODEL=${OLLAMA_SHIM_MODEL:-auto}
+      - OLLAMA_SHIM_MODEL_DISPLAY=${OLLAMA_SHIM_MODEL_DISPLAY:-askpanda-auto}
       - OLLAMA_SHIM_MODELS=${OLLAMA_SHIM_MODELS:-}
       - OLLAMA_SHIM_PORT=11434
       - OLLAMA_SHIM_VERSION=${OLLAMA_SHIM_VERSION:-v0.0-shim}

@@ -37,8 +37,7 @@ from tools.errorcodes import EC_TIMEOUT
 from tools.server_utils import (
     MCP_SERVER_URL,
     check_server_health,
-    call_mistral_direct,
-    call_ollama_direct,
+    call_model_with_failover,
 )
 
 # Configure Gemini API
@@ -224,10 +223,8 @@ Return ONLY the JSON object, nothing else.
                 gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
                 response = gemini_model.generate_content(question)
                 _answer = response.text
-            elif self.model == "mistral":
-                _answer = call_mistral_direct(question)
-            elif self.model in {"llama", "gpt-oss:20b"}:
-                _answer = call_ollama_direct(question)
+            elif self.model in {"auto", "mistral", "llama", "gpt-oss:20b"}:
+                _answer = call_model_with_failover(self.model, question)
             else:
                 # For other models, fall back to HTTP (but this creates deadlock risk)
                 server_url = os.getenv("MCP_SERVER_URL", f"{MCP_SERVER_URL}/rag_ask")
