@@ -141,18 +141,33 @@ Return ONLY the JSON object, nothing else.
             result = json.loads(response)
             logger.info(f"LLM classification result: {result}")
 
-            # If LLM found a task_id and we don't have a task agent yet, create one dynamically
-            if result.get("task_id") and not self.agents.get("task"):
-                task_id = str(result["task_id"])
-                logger.info(f"Dynamically creating TaskStatusAgent for task {task_id}")
+            # If LLM found a task_id/job_id and we don't have a task agent yet, create one dynamically
+            has_task_or_job = result.get("task_id") or result.get("job_id")
+            if has_task_or_job and not self.agents.get("task"):
+                identifier_value = result.get("job_id") or result.get("task_id")
+                identifier_type = "pandaid" if result.get("job_id") else "task"
+                lower_question = clean_question.lower()
+                if "pandaid" in lower_question or "panda id" in lower_question:
+                    identifier_type = "pandaid"
+                elif "job" in lower_question and "task" not in lower_question:
+                    identifier_type = "pandaid"
+                if identifier_value is None:
+                    identifier_value = _find_last_match(r'(\d{6,})', clean_question)
+                if identifier_value is None:
+                    logger.warning("LLM indicated task/job but no numeric identifier was found.")
+                    return "document"
+                identifier_str = str(identifier_value)
+                logger.info(f"Dynamically creating TaskStatusAgent for identifier {identifier_str} ({identifier_type})")
                 try:
-                    query_type = "job" if "job" in clean_question.lower() else "task"
+                    should_treat_as_job = identifier_type == "pandaid" or "job" in lower_question
+                    query_type = "job" if should_treat_as_job else "task"
                     self.agents["task"] = TaskStatusAgent(
                         self.model,
-                        task_id,
+                        identifier_str,
                         self.cache,
                         self.session_id,
-                        query_type=query_type
+                        query_type=query_type,
+                        identifier_type=identifier_type
                     )
                     return "task"
                 except Exception as e:

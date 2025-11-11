@@ -30,6 +30,7 @@ import re
 import requests
 import sys
 from collections import deque
+from typing import Optional
 # from fastmcp import FastMCP
 from time import sleep
 
@@ -66,7 +67,15 @@ class TaskStatusAgent:
     A simple agent that can give information about task status.
     This agent fetches metadata from PanDA, extracts relevant parts, and asks an LLM for analysis.
     """
-    def __init__(self, model: str, taskid: str, cache: str, session_id: str, query_type: str = "task") -> None:
+    def __init__(
+            self,
+            model: str,
+            taskid: str,
+            cache: str,
+            session_id: str,
+            query_type: str = "task",
+            identifier_type: str = "task"
+    ) -> None:
         """
         Initialize the TaskStatusAgent with a model.
 
@@ -79,11 +88,19 @@ class TaskStatusAgent:
         """
         self.model = model  # e.g., OpenAI or Anthropic wrapper
         self.query_type = query_type
+        self.identifier_type = identifier_type if identifier_type in {"task", "pandaid"} else "task"
         self.last_error: str | None = None
+        self.taskid: Optional[int] = None
+        self.pandaid: Optional[int] = None
+        self._resolved_job: Optional[dict] = None
+        self._storage_id = str(taskid)
         try:
-            self.taskid = int(taskid)  # PanDA task ID for the analysis
+            if self.identifier_type == "pandaid":
+                self.pandaid = int(taskid)
+            else:
+                self.taskid = int(taskid)
         except ValueError:
-            logger.error(f"Invalid task ID: {taskid}. It should be an integer.")
+            logger.error(f"Invalid {self.identifier_type} ID: {taskid}. It should be an integer.")
             sys.exit(1)
         self.session_id = session_id
         self.cache = cache
@@ -95,9 +112,9 @@ class TaskStatusAgent:
                 logger.error(f"Failed to create cache directory {self.cache}: {e}")
                 sys.exit(1)
 
-        path = os.path.join(os.path.join(self.cache, "tasks"), str(taskid))
+        path = os.path.join(os.path.join(self.cache, "tasks"), self._storage_id)
         if not os.path.exists(path):
-            logger.info(f"Creating directory for task {taskid} in cache.")
+            logger.info(f"Creating directory for task {self._storage_id} in cache.")
             try:
                 os.makedirs(path)
             except OSError as e:
@@ -195,15 +212,28 @@ class TaskStatusAgent:
         # Download metadata and pilot log concurrently
         workdir = os.path.join(self.cache, "tasks")
         base_url = get_base_url()
-        if self.query_type == "job":
+        fetch_key = self.taskid if self.identifier_type != "pandaid" else self.pandaid
+        if self.identifier_type == "pandaid":
+            url = f"{base_url}/jobs/?pandaid={self.pandaid}&json&mode=nodrop"
+            filename = f"pandaid_{self.pandaid}.json"
+        elif self.query_type == "job":
             url = f"{base_url}/jobs/?jeditaskid={self.taskid}&json&mode=nodrop"
+            filename = "metadata.json"
         else:
             url = f"{base_url}/task/{self.taskid}/?json"
-        metadata_success, metadata_message = fetch_data(self.taskid, filename="metadata.json", jsondata=True, workdir=workdir, url=url)
+            filename = "metadata.json"
+        metadata_success, metadata_message = fetch_data(
+            fetch_key,
+            filename=filename,
+            jsondata=True,
+            workdir=workdir,
+            url=url
+        )
 
         if metadata_success != 0:
             self.last_error = f"Task {self.taskid} metadata could not be retrieved from PanDA."
-            logger.warning(f"Failed to fetch metadata for task {self.taskid} - will not be able to analyze the task status")
+            identifier = self.pandaid if self.identifier_type == "pandaid" else self.taskid
+            logger.warning(f"Failed to fetch metadata for identifier {identifier} - will not be able to analyze the status")
             return EC_NOTFOUND, _file_dictionary, _metadata_dictionary
 
         logger.info(f"Downloaded JSON file: {metadata_message}")
@@ -216,13 +246,22 @@ class TaskStatusAgent:
             return EC_UNKNOWN_ERROR, None, None
 
         # For job queries, check if the 'jobs' key exists and is not empty
-        if self.query_type == "job" and (not task_data.get("jobs")):
+        if (self.query_type == "job" or self.identifier_type == "pandaid") and (not task_data.get("jobs")):
+            target = f"PandaID {self.pandaid}" if self.identifier_type == "pandaid" else f"task {self.taskid}"
             self.last_error = (
-                f"Task {self.taskid} contains no jobs. "
-                "The PanDA monitor returned an empty job list for this task ID."
+                f"{target} contains no jobs. "
+                "The PanDA monitor returned an empty job list for this identifier."
             )
-            logger.warning(f"No jobs found for jeditaskid {self.taskid}")
+            logger.warning(f"No jobs found for {target}")
             return EC_NOTFOUND, _file_dictionary, _metadata_dictionary
+
+        if self.identifier_type == "pandaid":
+            jobs = task_data.get("jobs", [])
+            if jobs:
+                self._resolved_job = jobs[0]
+                derived_task = jobs[0].get("jeditaskid")
+                if derived_task:
+                    self.taskid = derived_task
 
         # Extract relevant metadata from the JSON data
         try:
@@ -242,8 +281,16 @@ class TaskStatusAgent:
                     if "errorcode" in key:
                         if "errorcodes" not in _metadata_dictionary:
                             _metadata_dictionary["errorcodes"] = deque()
-                        if job[key] > 0:
-                            _metadata_dictionary["errorcodes"].append(job[key])
+                        value = job[key]
+                        if isinstance(value, str):
+                            try:
+                                value = int(value)
+                            except ValueError:
+                                value = None
+                        if isinstance(value, (int, float)) and value > 0:
+                            _metadata_dictionary["errorcodes"].append(value)
+            if self.identifier_type == "pandaid" and self._resolved_job:
+                _metadata_dictionary["resolved_job"] = self._resolved_job
         except KeyError:
             _metadata_dictionary = task_data.copy()
             # logger.warning(f"Error: Missing key in JSON data: {e}")
@@ -279,7 +326,8 @@ The dictionary should have the task id as the key (an integer), and its value sh
 
 Return only a valid Python dictionary. Here's the metadata dictionary:
         """
-        question = question.replace("TaskID", f"task ID ({self.taskid})")
+        label = f"PandaID ({self.pandaid})" if self.identifier_type == "pandaid" else f"task ID ({self.taskid})"
+        question = question.replace("TaskID", label)
         description = str(metadata_dictionary)
         question += f"\n\n{description}\n\n"
 
@@ -297,17 +345,18 @@ Return only a valid Python dictionary. Here's the metadata dictionary:
         exit_code, file_dictionary, metadata_dictionary = self.fetch_all_data()
         logger.info(f"metadata_dictionary: {metadata_dictionary}")
 
+        identifier_label = f"PandaID {self.pandaid}" if self.identifier_type == "pandaid" else f"task {self.taskid}"
         if exit_code == EC_NOTFOUND:
             if not self.last_error:
-                self.last_error = f"No metadata found for task {self.taskid}."
+                self.last_error = f"No metadata found for {identifier_label}."
             logger.warning(self.last_error)
             return None  # Return None instead of crashing
         elif not file_dictionary:
-            self.last_error = f"Failed to download metadata files for task {self.taskid}."
+            self.last_error = f"Failed to download metadata files for {identifier_label}."
             logger.warning(self.last_error)
             return None  # Return None instead of crashing
         elif not metadata_dictionary:  # Add check for empty metadata dictionary
-            self.last_error = f"Metadata dictionary is empty for task {self.taskid}."
+            self.last_error = f"Metadata dictionary is empty for {identifier_label}."
             logger.warning(self.last_error)
             return None
 
