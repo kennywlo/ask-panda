@@ -36,7 +36,7 @@ class Pipe:
             description="Ask PanDA endpoint",
         )
         model: str = Field(
-        default="mistral",
+            default="gpt-oss:20b",
             description="LLM model",
         )
 
@@ -46,7 +46,7 @@ class Pipe:
         )
 
     def __init__(self):
-        self.name = "AskPanDA Agent"
+        self.name = "Ask PanDA"
         self.valves = self.Valves()
 
     async def pipe(

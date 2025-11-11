@@ -30,6 +30,8 @@ from tools.errorcodes import EC_OK, EC_SERVERNOTRUNNING, EC_CONNECTIONPROBLEM, E
 MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://ask-panda:8000")
 MISTRAL_API_URL: str = "https://api.mistral.ai/v1/chat/completions"
 MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+LLAMA_API_URL: str = os.getenv("LLAMA_API_URL", "http://192.168.100.97:11434/api/generate")
+LLAMA_MODEL: str = os.getenv("LLAMA_MODEL", "gpt-oss:20b")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,6 +87,42 @@ def call_mistral_direct(prompt: str, timeout: int = 60) -> str:
         return data["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError) as exc:
         return f"Error: Unexpected response format from Mistral API - {exc}"
+
+
+def call_ollama_direct(prompt: str, timeout: int = 120) -> str:
+    """
+    Call the configured Ollama endpoint directly.
+
+    Args:
+        prompt: Prompt text to send to Ollama.
+        timeout: HTTP timeout in seconds.
+
+    Returns:
+        str: Model response text or an error string prefixed with 'Error:'.
+    """
+    payload = {
+        "model": LLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+    }
+
+    try:
+        response = requests.post(
+            LLAMA_API_URL,
+            json=payload,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return f"Error: Ollama request failed - {exc}"
+
+    if not response.ok:
+        return f"Error: Ollama responded with status {response.status_code} - {response.text}"
+
+    try:
+        data = response.json()
+        return data.get("response", "")
+    except ValueError as exc:
+        return f"Error: Unexpected response format from Ollama - {exc}"
 
 
 def check_server_health() -> int:

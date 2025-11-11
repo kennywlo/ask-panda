@@ -34,7 +34,12 @@ from agents.document_query_agent import DocumentQueryAgent
 from agents.log_analysis_agent import LogAnalysisAgent
 from agents.data_query_agent import TaskStatusAgent
 from tools.errorcodes import EC_TIMEOUT
-from tools.server_utils import MCP_SERVER_URL, check_server_health, call_mistral_direct
+from tools.server_utils import (
+    MCP_SERVER_URL,
+    check_server_health,
+    call_mistral_direct,
+    call_ollama_direct,
+)
 
 # Configure Gemini API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -221,6 +226,8 @@ Return ONLY the JSON object, nothing else.
                 _answer = response.text
             elif self.model == "mistral":
                 _answer = call_mistral_direct(question)
+            elif self.model in {"llama", "gpt-oss:20b"}:
+                _answer = call_ollama_direct(question)
             else:
                 # For other models, fall back to HTTP (but this creates deadlock risk)
                 server_url = os.getenv("MCP_SERVER_URL", f"{MCP_SERVER_URL}/rag_ask")

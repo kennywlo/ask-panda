@@ -64,10 +64,10 @@ docker compose up -d
 
 This will start two services:
 - **ask-panda**: Main server on port 8001 (external) → 8000 (internal)
-  - Uses `open-mistral-7b` model by default
+  - Uses the remote Ollama-hosted `gpt-oss:20b` model by default
   - Includes RAG with vector store for PanDA documentation
 - **ollama-shim**: Ollama-compatible API on port 11435 (external) → 11434 (internal)
-  - Exposes `mistral-proxy:latest` model
+  - Exposes `gpt-oss:20b-proxy:latest` model
   - Forwards requests to Ask-PanDA's RAG endpoint
   - Avoids conflict with localhost Ollama on port 11434
 
@@ -107,7 +107,8 @@ model accordingly (see below):
 export ANTHROPIC_API_KEY='your_anthropic_api_key'
 export OPENAI_API_KEY='your_openai_api_key'
 export GEMINI_API_KEY='your_gemini_api_key'
-export LLAMA_API_URL='http://localhost:11434/api/generate'  # For Ollama Llama3 model
+export LLAMA_API_URL='http://192.168.100.97:11434/api/generate'  # Remote Ollama (gpt-oss)
+export LLAMA_MODEL='gpt-oss:20b'
 ```
 
 # MCP server and Document Queries
@@ -138,6 +139,7 @@ python3 -m clients.document_query  --question="What is PanDA?" --model=openai --
 python3 -m clients.document_query  --question="How does the PanDA pilot work?" --model=anthropic --session-id=222
 python3 -m clients.document_query  --question="What is the purpose of the PanDA server?" --model=llama --session-id=333
 python3 -m clients.document_query  --question="What is the PanDA WMS?" --model=gemini --session-id=444 (shows that PanDA WMS is not properly defined)
+python3 -m clients.document_query  --question="Show me the latest pilot activity overview." --model=gpt-oss:20b --session-id=555
 python3 -m clients.document_query  --question="Please list all of the PanDA pilot error codes" --model=gemini --session-id=555 (demonstration of the limitations of the size of the context window)
 ```
 
@@ -296,7 +298,7 @@ The Ollama shim is included in the Docker Compose setup and runs on port 11435 (
 
 **Configuration:**
 - Port 11435 (external) → 11434 (internal container)
-- Uses `open-mistral-7b` model via Mistral API
+- Uses the Ollama-hosted `gpt-oss:20b` model
 - Automatically connects to Ask-PanDA service via Docker network
 
 **Setup for Open WebUI:**
@@ -310,11 +312,11 @@ The Ollama shim is included in the Docker Compose setup and runs on port 11435 (
    - For Docker Open WebUI: Set `OLLAMA_BASE_URL=http://host.docker.internal:11435`
    - For local Open WebUI: Set `OLLAMA_BASE_URL=http://localhost:11435`
 
-3. The model `mistral-proxy:latest` will appear in the model picker
+3. The model `gpt-oss:20b-proxy:latest` will appear in the model picker
 
 **Model Configuration:**
 - The shim currently uses the `/rag_ask` endpoint for better performance
-- Uses Mistral's `open-mistral-7b` model (configured in `ask_panda_server.py`)
+- Uses the remote `gpt-oss:20b` model (configured in `ask_panda_server.py`)
 - Responses include RAG-enhanced context from your documentation
 
 ### Standalone Deployment
@@ -330,8 +332,8 @@ requests to the Ask PanDA HTTP API.
 
 **Environment variables:**
 - `ASK_PANDA_BASE_URL` (default `http://localhost:8000`) – base URL for the Ask PanDA server
-- `OLLAMA_SHIM_MODEL` (default `mistral`) – backend model name
-- `OLLAMA_SHIM_MODEL_DISPLAY` (default `mistral-proxy`) – model name shown in Open WebUI
+- `OLLAMA_SHIM_MODEL` (default `gpt-oss:20b`) – backend model name
+- `OLLAMA_SHIM_MODEL_DISPLAY` (default `gpt-oss:20b-proxy`) – model name shown in Open WebUI
 - `OLLAMA_SHIM_PORT` (default `11434`) – port to listen on
 
 **Note:** When running standalone, ensure your MISTRAL_API_KEY is set in the environment.

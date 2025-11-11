@@ -35,7 +35,12 @@ from time import sleep
 
 from tools.context_memory import ContextMemory
 from tools.errorcodes import EC_NOTFOUND, EC_OK, EC_UNKNOWN_ERROR, EC_TIMEOUT
-from tools.server_utils import MCP_SERVER_URL, check_server_health, call_mistral_direct
+from tools.server_utils import (
+    MCP_SERVER_URL,
+    check_server_health,
+    call_mistral_direct,
+    call_ollama_direct,
+)
 from tools.tools import fetch_data, read_json_file, read_file
 
 # Configure Gemini API
@@ -127,6 +132,8 @@ class LogAnalysisAgent:
                 answer = response.text
             elif self.model == "mistral":
                 answer = call_mistral_direct(question)
+            elif self.model in {"llama", "gpt-oss:20b"}:
+                answer = call_ollama_direct(question)
             else:
                 # For other models, fall back to HTTP (but this creates deadlock risk)
                 server_url = f"{MCP_SERVER_URL}/llm_ask"

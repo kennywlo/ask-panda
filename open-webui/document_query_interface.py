@@ -49,7 +49,7 @@ class Pipe:
         if not user_valves:
             user_valves = self.UserValves()
 
-        model = "mistral"
+        model = "gpt-oss:20b"
         user_id = __user__.get("id")
         last_assistant_message = body["messages"][-1]
         prompt = last_assistant_message["content"]

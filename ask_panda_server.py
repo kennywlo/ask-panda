@@ -106,8 +106,9 @@ ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
 OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
 LLAMA_API_URL: Optional[str] = os.getenv(
-    "LLAMA_API_URL", "http://localhost:11434/api/generate"
+    "LLAMA_API_URL", "http://192.168.100.97:11434/api/generate"
 )
+LLAMA_MODEL: str = os.getenv("LLAMA_MODEL", "gpt-oss:20b")
 MISTRAL_API_KEY: Optional[str] = os.getenv("MISTRAL_API_KEY")
 
 # Configure SDKs - these operations might implicitly use the API keys above
@@ -322,7 +323,7 @@ class PandaMCP(FastMCP):
         except Exception as e:
             return f"An unexpected error occurred with OpenAI API: {e}"
 
-    async def _call_llama(self, prompt: str) -> str:
+    async def _call_llama(self, prompt: str, model_override: Optional[str] = None) -> str:
         """
         Call the LLaMA API (via a local server) to get a response for the given prompt.
 
@@ -332,6 +333,7 @@ class PandaMCP(FastMCP):
 
         Args:
             prompt (str): The prompt to send to the LLaMA model.
+            model_override (Optional[str]): Explicit model name to send to the Ollama API.
 
         Returns:
             str: The text response from the LLaMA model, or an error message
@@ -339,7 +341,8 @@ class PandaMCP(FastMCP):
         """
         # No API key check needed for LLaMA as per requirements
         try:
-            llama_payload = {"model": "llama3", "prompt": prompt, "stream": False}
+            llama_model = model_override or LLAMA_MODEL or "gpt-oss:20b"
+            llama_payload = {"model": llama_model, "prompt": prompt, "stream": False}
             async with httpx.AsyncClient() as client:  # Use httpx.AsyncClient
                 llama_response = await client.post(
                     LLAMA_API_URL, json=llama_payload, timeout=120.0
@@ -456,8 +459,9 @@ class PandaMCP(FastMCP):
             return await self._call_anthropic(prompt)
         if model == "openai":
             return await self._call_openai(prompt)
-        if model == "llama":
-            return await self._call_llama(prompt)
+        if model in {"llama", "gpt-oss:20b"}:
+            override = None if model == "llama" else model
+            return await self._call_llama(prompt, override)
         if model == "gemini":
             return await self._call_gemini(prompt)
         if model == "mistral":
@@ -539,8 +543,9 @@ async def llm_ask(request: QuestionRequest) -> dict[str, str]:
         response_text = await mcp._call_anthropic(request.question)
     elif model == "openai":
         response_text = await mcp._call_openai(request.question)
-    elif model == "llama":
-        response_text = await mcp._call_llama(request.question)
+    elif model in {"llama", "gpt-oss:20b"}:
+        override = None if model == "llama" else model
+        response_text = await mcp._call_llama(request.question, override)
     elif model == "mistral":
         response_text = await mcp._call_mistral(request.question)
     else:
