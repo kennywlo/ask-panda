@@ -1,5 +1,6 @@
 """
 AskPanDA API Pipe for Open WebUI
+content_type: markdown
 
 This pipe calls the ask-panda HTTP API instead of importing Python code directly.
 Much simpler and avoids dependency conflicts!

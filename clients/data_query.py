@@ -580,19 +580,46 @@ def format_answer(answer: dict) -> str:
         to_store += value
         return to_store
 
-    description = value.get('description')
-    if description:
-        to_store += f"**Description:**\n{description}\n\n"
+    def _render_section(label: str, content: object) -> str:
+        """Return a Markdown block for the provided section."""
+        if content is None:
+            return ""
 
-    problems = value.get('problems')
-    if problems:
-        to_store += f"**Problems:**\n{problems}\n\n"
+        def _format_value(value: object) -> str:
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, (int, float, bool)):
+                return str(value)
+            if isinstance(value, list):
+                if not value:
+                    return "_No data available._"
+                if all(isinstance(item, (str, int, float, bool)) for item in value):
+                    return "\n".join(f"- {item}" for item in value)
+                try:
+                    pretty = json.dumps(value, indent=2, default=str)
+                    return f"```json\n{pretty}\n```"
+                except TypeError:
+                    return f"```\n{value}\n```"
+            if isinstance(value, dict):
+                if not value:
+                    return "_No data available._"
+                try:
+                    pretty = json.dumps(value, indent=2, default=str)
+                    return f"```json\n{pretty}\n```"
+                except TypeError:
+                    return f"```\n{value}\n```"
+            return str(value).strip()
 
-    details = value.get('details')
-    if details:
-        to_store += f"**Details:**\n{details}\n\n"
+        formatted = _format_value(content)
+        if not formatted:
+            return ""
+        return f"### {label}\n{formatted}\n\n"
 
-    return to_store
+    to_store += _render_section("Description", value.get("description"))
+    to_store += _render_section("Problems", value.get("problems"))
+    to_store += _render_section("Details", value.get("details"))
+
+    return to_store.strip() or "No details provided."
 
 
 def main():
