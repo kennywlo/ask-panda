@@ -173,7 +173,8 @@ def call_model_with_failover(model: str, prompt: str) -> str:
         return f"Error: Unsupported model '{model}'"
 
     last_error = None
-    for candidate in sequence:
+    for idx, candidate in enumerate(sequence):
+        logger.info("Attempting model '%s' (failover index %d)", candidate, idx)
         if candidate == "mistral":
             result = call_mistral_direct(prompt)
         elif candidate in {"llama", "gpt-oss:20b"}:
@@ -185,9 +186,21 @@ def call_model_with_failover(model: str, prompt: str) -> str:
 
         if isinstance(result, str) and result.strip().lower().startswith("error:"):
             last_error = result
+            if idx + 1 < len(sequence):
+                logger.warning(
+                    "Model '%s' failed (%s). Falling back to '%s'.",
+                    candidate,
+                    result,
+                    sequence[idx + 1],
+                )
+            else:
+                logger.error("Model '%s' failed with no more fallbacks: %s", candidate, result)
             continue
+        if idx > 0:
+            logger.info("Failover succeeded using backup model '%s'", candidate)
         return result
 
+    logger.error("All configured models failed. Last error: %s", last_error)
     return last_error or "Error: All configured models failed."
 
 

@@ -69,6 +69,30 @@ def _tagged_display(name: str) -> str:
     return name if ":" in name else f"{name}:latest"
 
 
+def _normalize_backend_name(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+def _augment_with_priority_defaults(registry: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """
+    Ensure every model declared in ASK_PANDA_MODEL_PRIORITY is routable
+    through the shim so Open WebUI can request them explicitly.
+    """
+    seen = {_normalize_backend_name(entry["backend"]) for entry in registry}
+    priority_raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "mistral,gpt-oss:20b")
+    for item in priority_raw.split(","):
+        backend = item.strip()
+        if not backend:
+            continue
+        key = _normalize_backend_name(backend)
+        if key in seen:
+            continue
+        display = backend if ":" in backend else f"{backend}-proxy"
+        registry.append({"display": display, "backend": backend})
+        seen.add(key)
+    return registry
+
+
 def _load_model_registry() -> List[Dict[str, str]]:
     """
     Create a registry of {display, backend} pairs.
@@ -83,20 +107,20 @@ def _load_model_registry() -> List[Dict[str, str]]:
     default = [{"display": OLLAMA_SHIM_MODEL_DISPLAY, "backend": OLLAMA_SHIM_MODEL}]
     raw = os.getenv("OLLAMA_SHIM_MODELS")
     if not raw:
-        return default
+        return _augment_with_priority_defaults(default)
 
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         logger.warning("Failed to parse OLLAMA_SHIM_MODELS (%s); falling back to default", exc)
-        return default
+        return _augment_with_priority_defaults(default)
 
     registry: List[Dict[str, str]] = []
     if isinstance(parsed, dict):
         parsed = [parsed]
     if not isinstance(parsed, list):
         logger.warning("OLLAMA_SHIM_MODELS must be a list/dict; falling back to default")
-        return default
+        return _augment_with_priority_defaults(default)
 
     for entry in parsed:
         if not isinstance(entry, dict):
@@ -108,9 +132,9 @@ def _load_model_registry() -> List[Dict[str, str]]:
 
     if not registry:
         logger.warning("OLLAMA_SHIM_MODELS produced no valid entries; using default")
-        return default
+        return _augment_with_priority_defaults(default)
 
-    return registry
+    return _augment_with_priority_defaults(registry)
 
 
 MODEL_REGISTRY = _load_model_registry()
