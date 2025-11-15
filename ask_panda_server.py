@@ -637,7 +637,7 @@ async def agent_ask(request: QuestionRequest) -> dict[str, str]:
         logger.info(f"Routed to: {category}")
 
         routed_category = category
-        use_document_agent = category in ["document", "pilot_activity", "queue"] or agent is None
+        use_document_agent = category in ["document", "pilot_activity"] or agent is None
         if agent is None and category not in ["document", "pilot_activity", "queue"]:
             logger.info(f"No specialized agent available for category '{category}'. Falling back to document agent.")
             routed_category = "document"
@@ -646,6 +646,10 @@ async def agent_ask(request: QuestionRequest) -> dict[str, str]:
             # Use "None" for session_id to disable history (each API call should be independent)
             agent = DocumentQueryAgent(request.model.lower(), "None", mcp)
             answer = await agent.ask(request.question)
+        elif category == "queue":
+            if agent is None:
+                return {"answer": "Error: CRIC database client is not available.", "category": "document"}
+            answer = agent.ask(request.question)
         elif category == "log_analyzer":
             if agent is None:
                 return {"answer": "Error: Please provide a PanDA job ID so I can analyze the logs.", "category": "document"}

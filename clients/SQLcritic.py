@@ -115,6 +115,9 @@ class SQLcriticClient():
         '''
 
         field_contents = self.extract_fields(self.query)
+        field_contents_str = "\n".join(field_contents)
+        schema_list_str = ",".join(self.schema_list)
+
         prompt = f"""
         You are an expert on ATLAS PanDA CRIC (Computing Resource Information Catalogue) database system.
         Your job is to review the SQL query and verify whether it is appropriate and safe to answer the user's question.
@@ -127,10 +130,10 @@ class SQLcriticClient():
         {self.query}
 
         Database schema (table name, field name, data type, and examples if available):
-        {"\n".join(field_contents)}
+        {field_contents_str}
 
         All available schema:
-        {",".join(self.schema_list)}
+        {schema_list_str}
         ---
 
         Your tasks:

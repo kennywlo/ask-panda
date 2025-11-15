@@ -33,6 +33,7 @@ from time import sleep
 from agents.document_query_agent import DocumentQueryAgent
 from agents.log_analysis_agent import LogAnalysisAgent
 from agents.data_query_agent import TaskStatusAgent
+from clients.CRICanalysis import CRICanalysisClient
 from tools.errorcodes import EC_TIMEOUT
 from tools.server_utils import (
     MCP_SERVER_URL,
@@ -288,10 +289,17 @@ def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid
     Returns:
         dict: A dictionary mapping agent categories to their respective agent classes.
     """
+    from pathlib import Path
+
     query_type = "job" if "job" in question.lower() else "task"
+
+    # Construct path to CRIC schema
+    current_dir = Path(__file__).parent
+    schema_path = str(current_dir.parent / "resources" / "cric_schema.txt")
+
     return {
         "document": DocumentQueryAgent(model, session_id, mcp_instance),
-        "queue": None,
+        "queue": CRICanalysisClient(schema_path),
         "task": TaskStatusAgent(model, taskid, cache, session_id, query_type=query_type) if session_id and taskid else None,
         "log_analyzer": LogAnalysisAgent(model, pandaid, cache, session_id) if pandaid else None,
         "pilot_activity": None

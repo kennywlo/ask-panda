@@ -9,7 +9,7 @@ Nov, 2025
 import re
 import shutil
 from pathlib import Path
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 

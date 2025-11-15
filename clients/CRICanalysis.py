@@ -51,7 +51,7 @@ import google.generativeai as genai
 from pathlib import Path
 from langchain_huggingface import HuggingFaceEmbeddings
 from keybert import KeyBERT
-from SQLcritic import SQLcriticClient
+from clients.SQLcritic import SQLcriticClient
 
 MAX_DISCUSS = 3
 FIELDS_LIMIT = 10
@@ -337,6 +337,44 @@ class CRICanalysisClient:
         print("\nFinal Answer Tokens: ", prompt_tokens, ", Total Tokens: ", total_tokens)
         resp_text = getattr(resp, "text", "").strip()
         return resp_text
+
+    def ask(self, question: str) -> str:
+        """
+        Unified ask() method to match the interface of other agents.
+        Returns an answer string based on CRIC database query.
+        """
+        # Import here to avoid circular dependency
+        from clients.SQLcritic import SQLcriticClient
+
+        # Check if question needs CRIC
+        if not self.is_related(question):
+            return "This question does not require CRIC database information."
+
+        # Suggest relevant fields
+        fields = self.suggest_fields(question)
+
+        # Two-client discussion workflow
+        critic_client = SQLcriticClient(question, None)
+        ques = str(question)
+        _bool = True
+
+        for _ in range(MAX_DISCUSS):
+            SQLquery = self.generate_SQL(ques, fields)
+            critic_client.query = SQLquery
+            _bool, _suggestion = critic_client.criticize()
+            if _bool:
+                break
+            ques = str(question) + " " + _suggestion
+
+        if not _bool:
+            return f"Could not generate a valid SQL query after {MAX_DISCUSS} attempts. Please rephrase your question."
+
+        # Execute SQL and get answer
+        result = self.execute_SQL(SQLquery)
+        if result["success"]:
+            return self.Answer_with_Context(question, result["data"])
+        else:
+            return f"Database error: {result['error']}"
 
 
 def workflow(args):

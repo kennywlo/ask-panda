@@ -9,3 +9,4 @@ error_analyzer.log
 .swp
 __pycache__/
 
+resources/schemaDB/
