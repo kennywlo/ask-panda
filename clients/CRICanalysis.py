@@ -51,7 +51,6 @@ import google.generativeai as genai
 from pathlib import Path
 from langchain_huggingface import HuggingFaceEmbeddings
 from keybert import KeyBERT
-from clients.SQLcritic import SQLcriticClient
 
 MAX_DISCUSS = 3
 FIELDS_LIMIT = 10
@@ -378,6 +377,7 @@ class CRICanalysisClient:
 
 
 def workflow(args):
+    from clients.SQLcritic import SQLcriticClient
 
     client = CRICanalysisClient(schema_path)
     critic_client = SQLcriticClient(args.question, None)

@@ -36,7 +36,7 @@ Ask PanDA now mirrors the upstream “clients + server” structure so future pu
    - CLI scripts and Open WebUI pipes call these clients so behavior stays identical inside and outside Docker
 3. **UI & Shim adapters**
    - `open-webui/*.py` pipes call the shared clients, suppress Open WebUI follow-up prompts, and normalize sessions
-   - `ollama_shim.py` re-exposes `/agent_ask` as an Ollama-compatible `/api/chat` endpoint for Open WebUI
+   - `ollama_shim.py` re-exposes `/agent_ask` as an Ollama-compatible `/api/chat` endpoint for Open WebUI and other clients; the Docker compose stack runs it inside the network so you don’t need a host process
 
 This layered approach means you can iterate on the FastAPI server or the UI independently, and merging upstream changes is now mostly a matter of syncing the `clients/` folder.
 
@@ -49,7 +49,7 @@ pip install -r requirements.txt
 
 ## Docker Installation
 
-You can run Ask-PanDA and the Ollama shim in Docker containers with Docker Compose:
+You can run Ask-PanDA, the Dockerized Ollama shim, and Open WebUI with Docker Compose:
 
 1. Copy the environment template and configure your API keys:
 ```bash
@@ -62,14 +62,14 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This will start two services:
+This will start:
 - **ask-panda**: Main server on port 8001 (external) → 8000 (internal)
   - Uses automatic failover (Mistral first, then the remote `gpt-oss:20b`) when `model=auto`
   - Includes RAG with vector store for PanDA documentation
 - **ollama-shim**: Ollama-compatible API on port 11435 (external) → 11434 (internal)
-  - Exposes `askpanda-auto:latest`, which maps to the server’s failover mode
-  - Forwards requests to Ask-PanDA's RAG endpoint
-  - Avoids conflict with localhost Ollama on port 11434
+  - Presents `askpanda-auto:latest` (mapped to `model=auto`) for Open WebUI or other Ollama clients
+  - Forwards requests to Ask-PanDA’s `/agent_ask` endpoint
+- **open-webui**: Web interface on port 8082 (external) → 8080 (internal) that loads the Ask-PanDA pipe (and can still reach the shim if needed)
 
 3. Check service status:
 ```bash
@@ -89,14 +89,15 @@ docker compose down
 
 **Network Configuration:**
 - Services run in an isolated Docker network (`ask-panda-network`)
-- Internal communication uses service names (e.g., `http://ask-panda:8000`)
-- External access via mapped ports (8001 and 11435)
+- Internal communication uses service names (e.g., `http://ask-panda:8000` or `http://ollama-shim:11434`)
+- External access via mapped ports (8001, 8082, 11435)
 
 **Port Mapping Summary:**
 - `8000` - Local Ask-PanDA server (non-Docker, if running)
 - `8001` - Ask-PanDA Docker container
-- `11434` - Local Ollama server (if running)
-- `11435` - Ollama shim Docker container
+- `8082` - Open WebUI front-end
+- `11434` - Optional standalone Ollama shim if you launch it manually
+- `11435` - Dockerized Ollama shim (maps to `askpanda-auto:latest`)
 
 If you need the Ask PanDA cache somewhere else (e.g., to share across runs), set `ASK_PANDA_CACHE_DIR=/path/to/cache` in your shell or `.env` before launching Docker or the CLI tools.
 
@@ -115,7 +116,7 @@ The server does not provide a built-in default for `LLAMA_API_URL`, so be sure t
 
 ## Model Failover & Quick Switching
 
-- Use `model=auto` (default in the Open WebUI pipe and Ollama shim) to try Mistral first and automatically fall back to the local `gpt-oss:20b` server whenever the primary API is throttled.
+- Use `model=auto` (default in the Open WebUI pipe and the optional Ollama shim) to try Mistral first and automatically fall back to the local `gpt-oss:20b` server whenever the primary API is throttled.
 - Change the order instantly by setting `ASK_PANDA_MODEL_PRIORITY`. Example: `ASK_PANDA_MODEL_PRIORITY='gpt-oss:20b,mistral'` makes the local model primary but keeps Mistral as a backup.
 - You can still force a specific backend by sending `model=mistral`, `model=gpt-oss:20b`, etc. – only the `auto` alias enables failover.
 ```
@@ -299,45 +300,19 @@ open-webui serve
 
 (Let it run in it's own virtual environment - it wil produce a lot of output).
 
-## Ollama Shim for Open WebUI
+## Ollama Shim Options
 
-### Docker Deployment (Recommended)
+The Docker Compose stack includes the Ollama shim container so Open WebUI (and any other clients in the network) can talk to Ask-PanDA using Ollama’s `/api/chat` dialect. You generally don’t need to run another shim on the host.
 
-The Ollama shim is included in the Docker Compose setup and runs on port 11435 (to avoid conflicts with local Ollama on 11434).
+If you do want an additional Ollama-compatible endpoint—for example, to support a host-side Open WebUI or CLI that must reach `http://localhost:11434/api/...`—you can still run the shim manually.
 
-**Configuration:**
-- Port 11435 (external) → 11434 (internal container)
-- Uses the Ask-PanDA failover mode (`auto`) which prefers Mistral and falls back to `gpt-oss:20b`
-- Automatically connects to Ask-PanDA service via Docker network
-
-**Setup for Open WebUI:**
-1. Make sure Docker services are running:
-   ```bash
-   docker compose up -d
-   ```
-
-2. Configure Open WebUI to use the shim:
-   - Go to Admin Panel → Settings → Connections
-   - For Docker Open WebUI: Set `OLLAMA_BASE_URL=http://host.docker.internal:11435`
-   - For local Open WebUI: Set `OLLAMA_BASE_URL=http://localhost:11435`
-
-3. The model `askpanda-auto:latest` will appear in the model picker
-
-**Model Configuration:**
-- The shim currently uses the `/rag_ask` endpoint for better performance
-- Uses the remote `gpt-oss:20b` model as the fallback target (configured in `ask_panda_server.py`)
-- Responses include RAG-enhanced context from your documentation
-
-### Standalone Deployment
-
-If you want to run the shim without Docker:
+### Running an extra shim directly
 
 ```bash
 python3 ollama_shim.py
 ```
 
-The shim listens on port `11434` by default and forwards the chat/generate
-requests to the Ask PanDA HTTP API.
+The shim listens on port `11434` by default and forwards the chat/generate requests to the Ask-PanDA HTTP API.
 
 **Environment variables:**
 - `ASK_PANDA_BASE_URL` (default `http://localhost:8000`) – base URL for the Ask PanDA server
@@ -345,7 +320,18 @@ requests to the Ask PanDA HTTP API.
 - `OLLAMA_SHIM_MODEL_DISPLAY` (default `askpanda-auto`) – model name shown in Open WebUI
 - `OLLAMA_SHIM_PORT` (default `11434`) – port to listen on
 
-**Note:** When running standalone, ensure your MISTRAL_API_KEY is set in the environment.
+### Running an extra shim in Docker (optional)
+
+You can still build the shim container with the provided `Dockerfile.shim`:
+
+```bash
+docker build -f Dockerfile.shim -t ask-panda-ollama-shim .
+docker run -p 11435:11434 --network ask-panda-network \
+  -e ASK_PANDA_BASE_URL=http://ask-panda:8000 \
+  ask-panda-ollama-shim
+```
+
+Adjust the port mapping or network according to your environment.
 
 # Vector store
 

@@ -1,10 +1,11 @@
 # Ask-PanDA Docker Compose Configuration
 # ========================================
-# This setup runs Ask-PanDA with an Ollama-compatible shim for Open WebUI integration.
+# This setup runs the Ask-PanDA server alongside Open WebUI configured
+# with the Ask-PanDA pipe (no Ollama shim by default).
 #
 # Services:
 #   - ask-panda: Main RAG server with Mistral API backend (port 8001)
-#   - ollama-shim: Ollama API compatibility layer (port 11435)
+#   - open-webui: Web UI that talks to Ask-PanDA via the pipe integration
 #
 # Usage:
 #   docker compose up -d          # Start services
@@ -57,7 +58,6 @@ services:
       # Map internal 11434 to external 11435 to avoid conflict with localhost Ollama
       - "11435:11434"
     environment:
-      # Point to the ask-panda service in the Docker network
       - ASK_PANDA_BASE_URL=http://ask-panda:8000
       - OLLAMA_SHIM_MODEL=${OLLAMA_SHIM_MODEL:-auto}
       - OLLAMA_SHIM_MODEL_DISPLAY=${OLLAMA_SHIM_MODEL_DISPLAY:-askpanda-auto}
@@ -100,7 +100,10 @@ services:
     networks:
       - ask-panda-network
     depends_on:
-      - ollama-shim
+      ollama-shim:
+        condition: service_started
+      ask-panda:
+        condition: service_healthy
     restart: unless-stopped
 
 networks:
