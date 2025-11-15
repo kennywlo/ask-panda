@@ -107,9 +107,11 @@ model accordingly (see below):
 export ANTHROPIC_API_KEY='your_anthropic_api_key'
 export OPENAI_API_KEY='your_openai_api_key'
 export GEMINI_API_KEY='your_gemini_api_key'
-export LLAMA_API_URL='http://192.168.100.97:11434/api/generate'  # Remote Ollama (gpt-oss)
+export LLAMA_API_URL='http://<ollama-host>:11434/api/generate'  # Remote Ollama (gpt-oss)
 export LLAMA_MODEL='gpt-oss:20b'
-export ASK_PANDA_MODEL_PRIORITY='mistral,gpt-oss:20b'  # Ordered failover list used when model=auto
+export ASK_PANDA_MODEL_PRIORITY='mistral'  # Comma-separated list controls failover order when model=auto
+
+The server does not provide a built-in default for `LLAMA_API_URL`, so be sure to set it to the Ollama host that serves your fallback model.
 
 ## Model Failover & Quick Switching
 

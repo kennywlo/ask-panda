@@ -79,7 +79,7 @@ def _augment_with_priority_defaults(registry: List[Dict[str, str]]) -> List[Dict
     through the shim so Open WebUI can request them explicitly.
     """
     seen = {_normalize_backend_name(entry["backend"]) for entry in registry}
-    priority_raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "mistral,gpt-oss:20b")
+    priority_raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "")
     for item in priority_raw.split(","):
         backend = item.strip()
         if not backend:

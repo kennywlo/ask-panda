@@ -37,7 +37,7 @@ services:
       - LLAMA_API_URL=${LLAMA_API_URL:-}
       - INTERNAL_API_URL=http://ask-panda:8000/rag_ask
       - MCP_SERVER_URL=http://localhost:8000
-      - ASK_PANDA_MODEL_PRIORITY=${ASK_PANDA_MODEL_PRIORITY:-mistral,gpt-oss:20b}
+      - ASK_PANDA_MODEL_PRIORITY=${ASK_PANDA_MODEL_PRIORITY:-mistral}
     networks:
       - ask-panda-network
     restart: unless-stopped

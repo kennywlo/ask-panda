@@ -30,7 +30,7 @@ from tools.errorcodes import EC_OK, EC_SERVERNOTRUNNING, EC_CONNECTIONPROBLEM, E
 MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://ask-panda:8000")
 MISTRAL_API_URL: str = "https://api.mistral.ai/v1/chat/completions"
 MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
-LLAMA_API_URL: str = os.getenv("LLAMA_API_URL", "http://192.168.100.97:11434/api/generate")
+LLAMA_API_URL: str = os.getenv("LLAMA_API_URL", "")
 LLAMA_MODEL: str = os.getenv("LLAMA_MODEL", "gpt-oss:20b")
 AUTO_MODEL_ALIASES = {"auto", "default", "failover", "hybrid"}
 SUPPORTED_MODELS = {
@@ -44,7 +44,7 @@ SUPPORTED_MODELS = {
 
 
 def _parse_model_priority() -> list[str]:
-    raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "mistral,gpt-oss:20b")
+    raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "")
     priority = []
     for entry in raw.split(","):
         model = entry.strip().lower()
@@ -55,7 +55,7 @@ def _parse_model_priority() -> list[str]:
             continue
         priority.append(model)
     if not priority:
-        priority = ["mistral", "gpt-oss:20b"]
+        priority = ["mistral"]
     return priority
 
 
@@ -128,6 +128,12 @@ def call_ollama_direct(prompt: str, timeout: int = 120) -> str:
     Returns:
         str: Model response text or an error string prefixed with 'Error:'.
     """
+    if not LLAMA_API_URL:
+        return (
+            "Error: LLAMA_API_URL not set in environment. "
+            "Provide the Ollama endpoint hosting the fallback model."
+        )
+
     payload = {
         "model": LLAMA_MODEL,
         "prompt": prompt,

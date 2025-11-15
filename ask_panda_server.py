@@ -105,9 +105,7 @@ mcp = None
 ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
 OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
-LLAMA_API_URL: Optional[str] = os.getenv(
-    "LLAMA_API_URL", "http://192.168.100.97:11434/api/generate"
-)
+LLAMA_API_URL: Optional[str] = os.getenv("LLAMA_API_URL")
 LLAMA_MODEL: str = os.getenv("LLAMA_MODEL", "gpt-oss:20b")
 MISTRAL_API_KEY: Optional[str] = os.getenv("MISTRAL_API_KEY")
 AUTO_MODEL_ALIASES = {"auto", "default", "failover", "hybrid"}
@@ -122,7 +120,7 @@ SUPPORTED_MODELS = {
 
 
 def _parse_model_priority() -> list[str]:
-    raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "mistral,gpt-oss:20b")
+    raw = os.getenv("ASK_PANDA_MODEL_PRIORITY", "")
     priority = []
     for entry in raw.split(","):
         model = entry.strip().lower()
@@ -134,7 +132,7 @@ def _parse_model_priority() -> list[str]:
         priority.append(model)
     # Ensure there is at least one sane fallback chain
     if not priority:
-        priority = ["mistral", "gpt-oss:20b"]
+        priority = ["mistral"]
     return priority
 
 
@@ -368,6 +366,11 @@ class PandaMCP(FastMCP):
             str: The text response from the LLaMA model, or an error message
                  if the API call fails.
         """
+        if not LLAMA_API_URL:
+            return (
+                "Error: LLAMA_API_URL is not configured. Set the environment "
+                "variable to the Ollama endpoint hosting the fallback model."
+            )
         # No API key check needed for LLaMA as per requirements
         try:
             llama_model = model_override or LLAMA_MODEL or "gpt-oss:20b"
