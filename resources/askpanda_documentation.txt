@@ -18,7 +18,7 @@ AskPanDA combines a FastAPI MCP service with a shared client/router layer so eve
 ### FastAPI MCP Server
 - Hosts `/rag_ask` (retrieval augmented), `/llm_ask` (direct LLM), `/agent_ask` (auto-routing), and `/health`
 - Maintains the ChromaDB vector store and periodically refreshes it when files in `resources/` change
-- Executes the asynchronous agent implementations (document, data/task, log) and selection logic
+- Executes the asynchronous client implementations (document, data/task, log) and selection logic
 
 ### Client Routing Layer
 - Lives in `clients/` (Selection, DocumentQuery, TaskStatus, LogAnalysis, etc.)
@@ -28,19 +28,19 @@ AskPanDA combines a FastAPI MCP service with a shared client/router layer so eve
 ### Selection (Client + Server)
 Combines quick heuristics with LLM classification to route each question to the right capability. The router keeps track of previous turns so raw IDs (“47250094”) can be disambiguated.
 
-### Document Query (RAG)
-Handles general questions about PanDA using Retrieval-Augmented Generation (RAG). This agent:
+### Document Query Client (RAG)
+Handles general questions about PanDA using Retrieval-Augmented Generation (RAG). This client:
 - Uses ChromaDB vector store with sentence transformers for semantic search
 - Indexes documentation from multiple sources (PanDA, Rucio, pilots, etc.)
 - Provides contextual answers based on official documentation
 
-### Task Status Agent (Data Query Agent)
+### Task Status Client (Data Query Client)
 Provides real-time information about PanDA tasks by:
 - Fetching live metadata from BigPanda API
 - Analyzing task status, job counts, and error diagnostics
 - Presenting structured information about task execution
 
-### Log Analysis
+### Log Analysis Client
 Performs intelligent analysis of failed jobs by:
 - Downloading relevant log files from PanDA
 - Extracting error messages and diagnostics
@@ -49,11 +49,11 @@ Performs intelligent analysis of failed jobs by:
 
 ## Key Features
 
-### Multi-Agent Routing
-Questions are automatically classified and routed to the most appropriate agent:
-- Documentation queries → Document Query Agent
-- Task status queries → Task Status Agent
-- Job failure queries → Log Analysis Agent
+### Multi-Client Routing
+Questions are automatically classified and routed to the most appropriate client:
+- Documentation queries → Document Query Client
+- Task status queries → Task Status Client
+- Job failure queries → Log Analysis Client
 
 ### RAG System
 Uses ChromaDB vector database with the all-MiniLM-L6-v2 embedding model to provide contextually relevant answers from indexed documentation.
@@ -156,7 +156,7 @@ AskPanDA is developed as part of the PanDA project and uses:
 - FastAPI for the REST API
 - ChromaDB for vector storage
 - Google Gemini & Mistral SDKs for LLM inference
-- FastMCP for agent orchestration
+- FastMCP for client orchestration
 - Shared `clients/` package to keep the CLI and Open WebUI adapters aligned with upstream AskPanDA
 
 ## Support
@@ -181,5 +181,5 @@ Planned improvements include:
 - Multi-modal support (charts, graphs from task data)
 - Conversational memory for follow-up questions
 - Integration with additional ATLAS systems
-- Expanded agent capabilities (pilot activity, queue status)
+- Expanded client capabilities (pilot activity, queue status)
 - Enhanced error pattern recognition

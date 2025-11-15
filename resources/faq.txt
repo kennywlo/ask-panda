@@ -11,7 +11,7 @@ Question:
 What system am I talking to?
 
 Answer:
-You are talking to AskPanDA, an intelligent assistant for PanDA (Production and Distributed Analysis). The FastAPI server exposes `/rag_ask`, `/llm_ask`, and `/agent_ask`, while the `clients/selection.py` router makes sure your question reaches the right downstream agent.
+You are talking to AskPanDA, an intelligent assistant for PanDA (Production and Distributed Analysis). The FastAPI server exposes `/rag_ask`, `/llm_ask`, and `/agent_ask`, while the `clients/selection.py` router makes sure your question reaches the right downstream client.
 ------------------------------------------------
 Question:
 How do I get help with using PanDA?
@@ -37,7 +37,7 @@ Question:
 (user provided NUMBER)
 
 Answer:
-log_analyzer (only that and nothing else since it will be used by the selection agent - if the conversation is about a PanDA job)
-task (only that and nothing else since it will be used by the selection agent - if the conversation is about a PanDA task)
+log_analyzer (only that and nothing else since it will be used by the selection client - if the conversation is about a PanDA job)
+task (only that and nothing else since it will be used by the selection client - if the conversation is about a PanDA task)
 unknown (if it is not clear from the conversation what the number means)
 ------------------------------------------------
