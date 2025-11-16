@@ -299,7 +299,7 @@ def get_agents(model: str, session_id: str or None, pandaid: str or None, taskid
 
     return {
         "document": DocumentQueryAgent(model, session_id, mcp_instance),
-        "queue": CRICanalysisClient(schema_path),
+        "queue": CRICanalysisClient(schema_path, model=model),
         "task": TaskStatusAgent(model, taskid, cache, session_id, query_type=query_type) if session_id and taskid else None,
         "log_analyzer": LogAnalysisAgent(model, pandaid, cache, session_id) if pandaid else None,
         "pilot_activity": None

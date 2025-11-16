@@ -61,8 +61,9 @@ current_dir = Path(__file__).parent
 
 sys.path.append(str(current_dir.parent / "tools"))
 import txt2vecdb
+from tools.server_utils import call_model_with_failover
 
-# if the vector database does not exist, 
+# if the vector database does not exist,
 # call txt2vecdb function to convert schema.txt to schemaDB
 if not (current_dir.parent / "resources" / "schemaDB").exists():
     txt2vecdb.ToVecDB()
@@ -72,14 +73,39 @@ schema_path = current_dir.parent / "resources" / "cric_schema.txt"
 CRICdb_path = current_dir.parent / "resources" / "queuedata.db"
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel("models/gemini-2.5-flash")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 keyword_model = KeyBERT(model="all-MiniLM-L6-v2")
 embedder = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 
 def cos_sim(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def _call_llm(model: str, prompt: str) -> tuple[str, int, int]:
+    """
+    Call the specified LLM model with the given prompt.
+
+    Args:
+        model: Model name (e.g., 'mistral', 'gemini', 'auto')
+        prompt: The prompt to send to the model
+
+    Returns:
+        tuple: (response_text, prompt_tokens, total_tokens)
+    """
+    if model == "gemini":
+        # Call Gemini directly
+        gemini_model = genai.GenerativeModel("models/gemini-2.5-flash")
+        response = gemini_model.generate_content(prompt)
+        response_text = response.text.strip() if hasattr(response, "text") else str(response)
+        prompt_tokens = response.usage_metadata.prompt_token_count
+        total_tokens = response.usage_metadata.total_token_count
+        return response_text, prompt_tokens, total_tokens
+    else:
+        # Use model with failover (mistral, auto, llama, gpt-oss:20b)
+        response_text = call_model_with_failover(model, prompt)
+        # For non-Gemini models, we don't have token counts
+        return response_text, 0, 0
 
 def ans_yes_or_no(response: str) -> bool:
     emb_resp = embedder.embed_query(response)
@@ -92,13 +118,13 @@ def ans_yes_or_no(response: str) -> bool:
     print(f"sim_yes={sim_yes:.3f}, sim_no={sim_no:.3f}")
     return sim_yes > sim_no
 
-def need_CRIC(question: str) -> bool:
+def need_CRIC(question: str, model: str = "auto") -> bool:
 
     '''
     Verify whether the question needs CRIC or not.
 
     If there are key words like 'Please use CRIC..', then even though
-    it is a general question about CERN, the output of this question 
+    it is a general question about CERN, the output of this question
     will still return True. This is to give the user more freedom in
     getting professional and detailed answers.
 
@@ -130,38 +156,36 @@ def need_CRIC(question: str) -> bool:
     Answer strictly with 'yes' or 'no'.
 
     Examples:
-    Q: What is CRIC? → yes  
-    Q: How many jobs run on CERN grid? → yes  
-    Q: Which sites have failed pilots? → yes  
-    Q: Where are my jobs running? → yes  
-    Q: Which queues use Harvester? → yes  
-    Q: What is the current state of US sites? → yes  
-    Q: How does PanDA choose where to send jobs? → yes  
-    Q: What is PanDA? Need CRIC database search. → yes  
+    Q: What is CRIC? → yes
+    Q: How many jobs run on CERN grid? → yes
+    Q: Which sites have failed pilots? → yes
+    Q: Where are my jobs running? → yes
+    Q: Which queues use Harvester? → yes
+    Q: What is the current state of US sites? → yes
+    Q: How does PanDA choose where to send jobs? → yes
+    Q: What is PanDA? Need CRIC database search. → yes
 
-    Q: What is PanDA? → no  
-    Q: Who developed PanDA? → no  
-    Q: Explain PanDA architecture. → no  
-    Q: What is the purpose of CRIC? → no  
-    Q: What is ATLAS? → no  
-    Q: What is Tier-1? → no  
+    Q: What is PanDA? → no
+    Q: Who developed PanDA? → no
+    Q: Explain PanDA architecture. → no
+    Q: What is the purpose of CRIC? → no
+    Q: What is ATLAS? → no
+    Q: What is Tier-1? → no
 
     Question: "{question}"
     Answer only 'yes' or 'no'.
     """
-    resp = gemini_model.generate_content(classifier_prompt)
-    prompt_tokens = resp.usage_metadata.prompt_token_count
-    total_tokens  = resp.usage_metadata.total_token_count
+    resp_text, prompt_tokens, total_tokens = _call_llm(model, classifier_prompt)
     print("\n Classifier Prompt Tokens: ", prompt_tokens, ", Total Tokens: ", total_tokens)
-    resp_text = getattr(resp, "text", "").strip().lower()
+    resp_text = resp_text.strip().lower()
     if "yes" in resp_text: return True
     if "no"  in resp_text: return False
     return ans_yes_or_no(resp_text)
 
-def llm_suggest_fields(question: str, schema_text: str) -> list[str]:
-    
+def llm_suggest_fields(question: str, schema_text: str, model: str = "auto") -> list[str]:
+
     """
-    Use Gemini to analyze the CRIC schema and suggest relevant fields.
+    Use LLM to analyze the CRIC schema and suggest relevant fields.
     Returns a list of column names.
 
     The fields are selected according to the cric_schema.txt, which was
@@ -173,7 +197,7 @@ def llm_suggest_fields(question: str, schema_text: str) -> list[str]:
     calculated similarities with the question keywords by KeyBERT().
     Then the top fields are selected after ranking.
     """
-    
+
     prompt = f"""
     You are given the CRIC queuedata database schema.
 
@@ -186,12 +210,10 @@ def llm_suggest_fields(question: str, schema_text: str) -> list[str]:
     Output only a comma-separated list of field names, without explanations.
     """
 
-    # Ask Gemini model
-    response = gemini_model.generate_content(prompt)
-    prompt_tokens = response.usage_metadata.prompt_token_count
-    total_tokens  = response.usage_metadata.total_token_count
+    # Ask LLM model
+    ans, prompt_tokens, total_tokens = _call_llm(model, prompt)
     print("\n Field Suggestor Prompt Tokens: ", prompt_tokens, ", Total Tokens: ", total_tokens)
-    ans = response.text.strip() if response and response.text else ""
+    ans = ans.strip()
     fields = [f.strip() for f in ans.split(",") if f.strip()]
 
     # rank and filter out fields
@@ -216,8 +238,8 @@ def llm_suggest_fields(question: str, schema_text: str) -> list[str]:
 
     return top_fields
 
-def llm_generate_SQL(question: str, fields: list[str]) -> str:
-    
+def llm_generate_SQL(question: str, fields: list[str], model: str = "auto") -> str:
+
     prompt = f"""
     You are given the question that requires CRIC database data
 
@@ -242,12 +264,8 @@ def llm_generate_SQL(question: str, fields: list[str]) -> str:
     6. If the question is conceptual or descriptive and does not map to numeric or categorical data,
        limit the maximum returned rows to be {ROWS_LIMIT}.
     """
-    # Ask Gemini model
-    response = gemini_model.generate_content(prompt)
-    sql_text = response.text.strip() if hasattr(response, "text") else str(response)
-
-    prompt_tokens = response.usage_metadata.prompt_token_count
-    total_tokens  = response.usage_metadata.total_token_count
+    # Ask LLM model
+    sql_text, prompt_tokens, total_tokens = _call_llm(model, prompt)
 
     if "```sql" in sql_text or "```" in sql_text:
         sql_text = sql_text.replace("```sql", "").replace("```", "").strip()
@@ -262,21 +280,22 @@ class CRICanalysisClient:
     3. Execute the SQL lines and get results.
     4. Summarize the results and generate the context for answering.
     """
-    def __init__(self, schema_path: str):
+    def __init__(self, schema_path: str, model: str = "auto"):
         self.schema_path = Path(schema_path)
         self.schema_text = self.schema_path.read_text(encoding="utf-8")
         self.SQLquery = None
+        self.model = model
 
     def is_related(self, question: str) -> bool:
-        return need_CRIC(question)
+        return need_CRIC(question, self.model)
 
     def suggest_fields(self, question: str):
-        fields = llm_suggest_fields(question, self.schema_text)
-        # print(f"[Gemini-suggested fields for '{question}'] → {fields}")
+        fields = llm_suggest_fields(question, self.schema_text, self.model)
+        # print(f"[LLM-suggested fields for '{question}'] → {fields}")
         return fields
-    
+
     def generate_SQL(self, question: str, fields: list[str]):
-        self.SQLquery = llm_generate_SQL(question, fields)
+        self.SQLquery = llm_generate_SQL(question, fields, self.model)
         print(f"\n SQL query -> {self.SQLquery}")
         return self.SQLquery
 
@@ -318,7 +337,7 @@ class CRICanalysisClient:
         With the given context from the CRIC database: {context},
         Please use this context and try to answer the question: {question}
 
-        Note: 
+        Note:
         1. If this is a specific question asking for the status of the PanDA
            system, please use all of the context.
         2. If this is a general question, try to use part of the context to
@@ -330,12 +349,9 @@ class CRICanalysisClient:
         if len(prompt) > 20000:  # rough guard
             prompt = prompt[:20000] + "\n[Context truncated due to length.]"
 
-        resp = gemini_model.generate_content(prompt)
-        prompt_tokens = resp.usage_metadata.prompt_token_count
-        total_tokens  = resp.usage_metadata.total_token_count
+        resp_text, prompt_tokens, total_tokens = _call_llm(self.model, prompt)
         print("\nFinal Answer Tokens: ", prompt_tokens, ", Total Tokens: ", total_tokens)
-        resp_text = getattr(resp, "text", "").strip()
-        return resp_text
+        return resp_text.strip()
 
     def ask(self, question: str) -> str:
         """
@@ -379,7 +395,7 @@ class CRICanalysisClient:
 def workflow(args):
     from clients.SQLcritic import SQLcriticClient
 
-    client = CRICanalysisClient(schema_path)
+    client = CRICanalysisClient(schema_path, model=getattr(args, 'model', 'auto'))
     critic_client = SQLcriticClient(args.question, None)
 
     if (client.is_related(args.question)):
@@ -407,7 +423,7 @@ def workflow(args):
         print("$"*20)
         if (result["success"]):
             answer = client.Answer_with_Context(args.question,result["data"])
-            print("\nAnswer by Gemini: \n")
+            print("\nAnswer by LLM: \n")
             print(answer)
         else:
             print(result["error"])
@@ -418,5 +434,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Suggest CRIC fields for a question")
     parser.add_argument("--question", "-q", required=True, help="Natural-language question about CRIC")
+    parser.add_argument("--model", "-m", default="auto", help="Model to use (auto, mistral, gemini, etc.)")
     args = parser.parse_args()
     workflow(args)
