@@ -249,10 +249,21 @@ class TaskStatusAgent:
         # For job queries, check if the 'jobs' key exists and is not empty
         if (self.query_type == "job" or self.identifier_type == "pandaid") and (not task_data.get("jobs")):
             target = f"PandaID {self.pandaid}" if self.identifier_type == "pandaid" else f"task {self.taskid}"
-            self.last_error = (
-                f"{target} contains no jobs. "
-                "The PanDA monitor returned an empty job list for this identifier."
-            )
+
+            # If this was a PandaID query with no jobs, suggest it might be a TaskID
+            if self.identifier_type == "pandaid":
+                self.last_error = (
+                    f"{target} contains no jobs. "
+                    "The PanDA monitor returned an empty job list for this identifier. "
+                    f"Maybe it's a task not a job? Try querying it as a TaskID: "
+                    f"https://bigpanda.cern.ch/task/{self.pandaid}/"
+                )
+            else:
+                self.last_error = (
+                    f"{target} contains no jobs. "
+                    "The PanDA monitor returned an empty job list for this identifier."
+                )
+
             logger.warning(f"No jobs found for {target}")
             return EC_NOTFOUND, _file_dictionary, _metadata_dictionary
 

@@ -45,8 +45,9 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
       interval: 30s
-      timeout: 10s
-      retries: 3
+      timeout: 60s
+      retries: 4
+      start_period: 120s
 
   ollama-shim:
     build:
