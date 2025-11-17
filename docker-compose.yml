@@ -43,7 +43,7 @@ services:
       - ask-panda-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8000/health"]
       interval: 30s
       timeout: 60s
       retries: 4

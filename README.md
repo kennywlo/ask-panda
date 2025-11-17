@@ -119,6 +119,35 @@ The server does not provide a built-in default for `LLAMA_API_URL`, so be sure t
 - Use `model=auto` (default in the Open WebUI pipe and the optional Ollama shim) to try Mistral first and automatically fall back to the local `gpt-oss:20b` server whenever the primary API is throttled.
 - Change the order instantly by setting `ASK_PANDA_MODEL_PRIORITY`. Example: `ASK_PANDA_MODEL_PRIORITY='gpt-oss:20b,mistral'` makes the local model primary but keeps Mistral as a backup.
 - You can still force a specific backend by sending `model=mistral`, `model=gpt-oss:20b`, etc. – only the `auto` alias enables failover.
+- **Automatic Error Detection**: The system now properly detects backend errors and triggers failover. Check the `/health` endpoint for detailed startup status.
+
+## Health Check & Startup Status
+
+The `/health` endpoint provides detailed initialization status during startup:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Example response during startup:
+```json
+{
+  "status": "starting",
+  "ready": false,
+  "message": "Loading vector store manager..."
+}
+```
+
+When fully initialized:
+```json
+{
+  "status": "ok",
+  "ready": true,
+  "message": "Ready - All systems initialized"
+}
+```
+
+This is useful for monitoring long-running initialization (especially when computing embeddings for the vector store).
 ```
 
 # MCP server and Document Queries
@@ -199,8 +228,26 @@ The following pilot error codes have been verified to work with the error analys
 
 # Testing and Monitoring
 
+## Automated Test Suite
+
+A comprehensive test suite is provided in `tests/test_prompts.py` that validates all 19 query types across 4 categories:
+
+```bash
+python3 tests/test_prompts.py
+```
+
+This tests:
+- **7 Document Queries**: PanDA concepts, usage, pilots, workflows
+- **4 Task Queries**: Task status, problems, completion status
+- **3 Log Analysis Queries**: Job failure analysis
+- **5 Edge Cases**: Non-existent tasks, self-referential queries, ambiguous inputs
+
+See `tests/README.md` for details.
+
+## Demo & Integration Scripts
+
 - `sc25-demo/scripts/final_test.sh` exercises the Open WebUI ↔ Ollama shim ↔ FastAPI stack end-to-end.
-- `sc25-demo/scripts/test_agent_queries.sh` hammers `/agent_ask` directly to make sure document, task, and log questions route correctly (set `BASE_URL` if you’re not on localhost).
+- `sc25-demo/scripts/test_agent_queries.sh` hammers `/agent_ask` directly to make sure document, task, and log questions route correctly (set `BASE_URL` if you're not on localhost).
 - `sc25-demo/scripts/pre_demo_check.sh` verifies the vector store, Docker health checks, and disk space before a live run.
 
 Run these scripts whenever you rebase with upstream master to ensure the shared client/server layers remain compatible. The SC25 live-demo guide plus these scripts now live under `sc25-demo/` (see `sc25-demo/README.md` and `sc25-demo/scripts/`).

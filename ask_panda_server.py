@@ -77,21 +77,37 @@ async def lifespan(app: FastAPI):
     Args:
         app: FastAPI instance to attach the lifespan handler to.
     """
-    global vectorstore_manager, mcp
+    global vectorstore_manager, mcp, startup_status
 
     resources_dir = Path("resources")
     chroma_dir = Path("chromadb")
 
-    vectorstore_manager = get_vectorstore_manager(resources_dir, chroma_dir)
-    if not vectorstore_manager:
-        logger.error("Failed to initialize VectorStoreManager.")
-        raise RuntimeError("VectorStoreManager initialization failed.")
+    try:
+        startup_status["message"] = "Loading vector store manager..."
+        logger.info(startup_status["message"])
+        vectorstore_manager = get_vectorstore_manager(resources_dir, chroma_dir)
+        if not vectorstore_manager:
+            startup_status["message"] = "Error: Failed to initialize VectorStoreManager."
+            logger.error(startup_status["message"])
+            raise RuntimeError("VectorStoreManager initialization failed.")
 
-    vectorstore_manager.start_periodic_updates()
+        startup_status["message"] = "Starting periodic vector store updates..."
+        logger.info(startup_status["message"])
+        vectorstore_manager.start_periodic_updates()
 
-    mcp = PandaMCP("panda", resources_dir, chroma_dir, vectorstore_manager)
+        startup_status["message"] = "Initializing MCP interface..."
+        logger.info(startup_status["message"])
+        mcp = PandaMCP("panda", resources_dir, chroma_dir, vectorstore_manager)
 
-    logger.info("FastAPI startup complete. Vector store and MCP initialized successfully.")
+        startup_status["initialized"] = True
+        startup_status["message"] = "Ready - All systems initialized"
+        logger.info(f"FastAPI startup complete. {startup_status['message']}")
+    except Exception as e:
+        startup_status["initialized"] = False
+        startup_status["message"] = f"Error during startup: {str(e)}"
+        logger.error(startup_status["message"])
+        raise
+
     yield
 
 # FastAPI instance
@@ -100,6 +116,10 @@ app = FastAPI(lifespan=lifespan)
 # Declare global references (initialized later)
 vectorstore_manager = None
 mcp = None
+startup_status = {
+    "initialized": False,
+    "message": "Starting up..."
+}
 
 # Set up API keys from environment variables
 ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
@@ -228,7 +248,7 @@ class PandaMCP(FastMCP):
                 t.done()
                 return res.choices[0].message.content.strip()
         except Exception as e:
-            return f"Mistral SDK error (model={model_name}): {str(e)}"
+            return f"Error: Mistral SDK error (model={model_name}): {str(e)}"
 
     async def _call_mistral(self, prompt: str) -> str:
         api_key = os.getenv("MISTRAL_API_KEY")
@@ -259,7 +279,7 @@ class PandaMCP(FastMCP):
                     last_err = e
                     await asyncio.sleep(backoff)
                     backoff *= 2
-            return f"Mistral SDK error after retries (model={model_name}): {last_err!s}"
+            return f"Error: Mistral SDK error after retries (model={model_name}): {last_err!s}"
 
     async def _call_anthropic(self, prompt: str) -> str:
         """
@@ -549,10 +569,27 @@ class QuestionRequest(BaseModel):
 
 
 @app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Simple health-check endpoint."""
-    logger.debug("Health check complete.")
-    return {"status": "ok"}
+async def health_check() -> dict:
+    """
+    Health-check endpoint that returns detailed initialization status.
+
+    Returns:
+        dict: Status information including initialization state and message
+    """
+    if startup_status["initialized"]:
+        logger.debug("Health check complete - system ready")
+        return {
+            "status": "ok",
+            "ready": True,
+            "message": startup_status["message"]
+        }
+    else:
+        logger.debug(f"Health check - system starting up: {startup_status['message']}")
+        return {
+            "status": "starting",
+            "ready": False,
+            "message": startup_status["message"]
+        }
 
 
 @app.post("/rag_ask")
