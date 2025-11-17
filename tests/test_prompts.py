@@ -5,7 +5,7 @@ import requests
 import json
 
 BASE_URL = "http://localhost:8000"
-MODEL = "mistral"  # Using mistral as the default model
+MODEL = "auto"  # Using 'auto' to test fallback functionality (fallsback from mistral to gpt-oss:20b)
 
 prompts = {
     # DOCUMENT QUERIES (7)
