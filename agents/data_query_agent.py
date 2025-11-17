@@ -360,11 +360,33 @@ Return only a valid Python dictionary. Here's the metadata dictionary:
         identifier_label = f"PandaID {self.pandaid}" if self.identifier_type == "pandaid" else f"task {self.taskid}"
         if exit_code == EC_NOTFOUND:
             if not self.last_error:
-                self.last_error = f"No metadata found for {identifier_label}."
+                # Provide more specific error message for non-existent IDs
+                if self.identifier_type == "pandaid":
+                    self.last_error = (
+                        f"{identifier_label} not found in PanDA. "
+                        "Please verify the PandaID is correct. "
+                        "If you have a TaskID instead, try querying it as a task."
+                    )
+                else:
+                    self.last_error = (
+                        f"{identifier_label} not found in PanDA. "
+                        "Please verify the task ID is correct."
+                    )
             logger.warning(self.last_error)
             return None  # Return None instead of crashing
         elif not file_dictionary:
-            self.last_error = f"Failed to download metadata files for {identifier_label}."
+            # Distinguish between download failure and not found
+            if self.identifier_type == "pandaid":
+                self.last_error = (
+                    f"{identifier_label} not found in PanDA. "
+                    "Please verify the PandaID is correct. "
+                    "If you have a TaskID instead, try querying it as a task."
+                )
+            else:
+                self.last_error = (
+                    f"{identifier_label} not found in PanDA. "
+                    "Please verify the task ID is correct."
+                )
             logger.warning(self.last_error)
             return None  # Return None instead of crashing
         elif not metadata_dictionary:  # Add check for empty metadata dictionary
