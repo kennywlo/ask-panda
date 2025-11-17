@@ -101,7 +101,14 @@ class Pipe:
                 }
             )
 
-        return data.get("answer", "No answer provided.")
+        # Build final response with log excerpts if available
+        answer = data.get("answer", "No answer provided.")
+        log_excerpts = data.get("log_excerpts")
+
+        if log_excerpts:
+            answer += "\n\n---\n\n**Log Excerpts:**\n```\n" + log_excerpts + "\n```"
+
+        return answer
 
     @staticmethod
     def _extract_last_user_prompt(messages: List[Dict[str, Any]]) -> str:

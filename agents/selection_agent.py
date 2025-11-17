@@ -98,11 +98,15 @@ Category Definitions:
 - task: Questions about specific PanDA task status, job counts, or task metadata.
   NOTE: "job" in status/info contexts (e.g., "status of job X", "info on job X") refers to TASKS, not log analysis.
 - IMPORTANT: Only return "task" if the user mentions a numeric PanDA task or job ID (at least 5 digits). Without an ID, default to "document".
-- log_analyzer: Questions about why a specific job FAILED or log analysis (must mention failure/error/crash/problem).
-- IMPORTANT: Only return "log_analyzer" if there is a numeric PandaID or job ID referenced in the failure question.
+- log_analyzer: Questions requesting logs (pilot/payload/error logs) for a SPECIFIC job ID, OR asking why a job failed/crashed.
+  **CRITICAL**: ANY request for logs with a specific job number is log_analyzer, NOT pilot_activity!
+  Examples: "pilot log for job X", "show me the log for job X", "any log for job X", "why did job X fail?"
+- IMPORTANT: Only return "log_analyzer" if there is a numeric PandaID or job ID referenced.
 - document: General usage questions, how-to guides, concepts (PanDA, prun, pathena, error codes)
 - queue: Questions about site/queue data (corepower, copytool, queue status, rucio usage)
-- pilot_activity: Questions about pilot activity, failures, statistics, or Grafana links
+- pilot_activity: Questions about pilot activity/failures/statistics in GENERAL (no specific job ID)
+  Example: "how many pilots are running?", "show me pilot failures on site X"
+  **CRITICAL**: If a specific job ID is mentioned with logs, use log_analyzer instead!
 
 Examples:
 
@@ -117,6 +121,12 @@ Q: "How about job 12345?"
 
 Q: "Why did job 12345 crash?"
 {{"category": "log_analyzer", "task_id": null, "job_id": 12345, "confidence": "high", "reasoning": "Explicit job failure question with job ID"}}
+
+Q: "any pilot log for job 6873281623?"
+{{"category": "log_analyzer", "task_id": null, "job_id": 6873281623, "confidence": "high", "reasoning": "Request for pilot log with specific job ID"}}
+
+Q: "show me the log for job 999888"
+{{"category": "log_analyzer", "task_id": null, "job_id": 999888, "confidence": "high", "reasoning": "Request for job log with specific job ID"}}
 
 Q: "Tell me about 999888777"
 {{"category": "task", "task_id": 999888777, "job_id": null, "confidence": "medium", "reasoning": "Large number likely task ID but context unclear"}}
@@ -142,9 +152,42 @@ Return ONLY the JSON object, nothing else.
             result = json.loads(response)
             logger.info(f"LLM classification result: {result}")
 
-            # If LLM found a task_id/job_id and we don't have a task agent yet, create one dynamically
+            # FALLBACK OVERRIDE: If LLM classified as pilot_activity but question mentions "log" with a job ID,
+            # override to log_analyzer (Gemini sometimes misclassifies this)
+            if result.get("category") == "pilot_activity" and result.get("job_id"):
+                if any(keyword in clean_question.lower() for keyword in ["log", "logs", "logfile"]):
+                    logger.info(f"Overriding pilot_activity -> log_analyzer (question mentions 'log' with job ID)")
+                    result["category"] = "log_analyzer"
+
+            # PRIORITY 1: Check for log analyzer requests first (before task status)
+            # If LLM found a job_id and classified as log_analyzer, check if job actually failed
+            if result.get("job_id") and result.get("category") == "log_analyzer" and not self.agents.get("log_analyzer"):
+                job_id = str(result["job_id"])
+                logger.info(f"Checking if job {job_id} failed before creating LogAnalysisAgent")
+
+                # Check job status via BigPanDA API
+                job_status = self._get_job_status(job_id)
+
+                if job_status and job_status.lower() in ['failed', 'holding', 'cancelled']:
+                    logger.info(f"Job {job_id} has status '{job_status}' - creating LogAnalysisAgent")
+                    try:
+                        self.agents["log_analyzer"] = LogAnalysisAgent(
+                            self.model,
+                            job_id,
+                            self.cache,
+                            self.session_id
+                        )
+                        return "log_analyzer"
+                    except Exception as e:
+                        logger.error(f"Failed to create LogAnalysisAgent: {e}")
+                else:
+                    # Job hasn't failed - route to task status instead to show job info
+                    logger.info(f"Job {job_id} has status '{job_status}' (not failed) - routing to task status instead")
+
+            # PRIORITY 2: If LLM found a task_id/job_id and we don't have a task agent yet, create one dynamically
+            # BUT: Skip this if we already decided on log_analyzer category
             has_task_or_job = result.get("task_id") or result.get("job_id")
-            if has_task_or_job and not self.agents.get("task"):
+            if has_task_or_job and not self.agents.get("task") and result.get("category") != "log_analyzer":
                 identifier_value = result.get("job_id") or result.get("task_id")
                 identifier_type = "pandaid" if result.get("job_id") else "task"
                 lower_question = clean_question.lower()
@@ -174,20 +217,43 @@ Return ONLY the JSON object, nothing else.
                 except Exception as e:
                     logger.error(f"Failed to create TaskStatusAgent: {e}")
 
-            # If LLM found a job_id and we don't have a log_analyzer agent yet, create one
+            # FALLBACK: If LLM found a job_id but didn't classify as log_analyzer, still check
+            # (This handles edge cases where LLM might not perfectly classify log queries)
             if result.get("job_id") and not self.agents.get("log_analyzer"):
                 job_id = str(result["job_id"])
-                logger.info(f"Dynamically creating LogAnalysisAgent for job {job_id}")
-                try:
-                    self.agents["log_analyzer"] = LogAnalysisAgent(
-                        self.model,
-                        job_id,
-                        self.cache,
-                        self.session_id
-                    )
-                    return "log_analyzer"
-                except Exception as e:
-                    logger.error(f"Failed to create LogAnalysisAgent: {e}")
+                logger.info(f"Checking if job {job_id} failed before creating LogAnalysisAgent")
+
+                # Check job status via BigPanDA API
+                job_status = self._get_job_status(job_id)
+
+                if job_status and job_status.lower() in ['failed', 'holding', 'cancelled']:
+                    logger.info(f"Job {job_id} has status '{job_status}' - creating LogAnalysisAgent")
+                    try:
+                        self.agents["log_analyzer"] = LogAnalysisAgent(
+                            self.model,
+                            job_id,
+                            self.cache,
+                            self.session_id
+                        )
+                        return "log_analyzer"
+                    except Exception as e:
+                        logger.error(f"Failed to create LogAnalysisAgent: {e}")
+                else:
+                    # Job hasn't failed - route to task status instead to show job info
+                    logger.info(f"Job {job_id} has status '{job_status}' (not failed) - routing to task status instead")
+                    if not self.agents.get("task"):
+                        try:
+                            self.agents["task"] = TaskStatusAgent(
+                                self.model,
+                                job_id,
+                                self.cache,
+                                self.session_id,
+                                query_type="job",
+                                identifier_type="pandaid"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to create TaskStatusAgent: {e}")
+                    return "task"
 
             # Return the classified category
             category = result.get("category", "document")
@@ -216,6 +282,31 @@ Return ONLY the JSON object, nothing else.
             elif "pilot" in response_lower:
                 return "pilot_activity" if self.agents.get("pilot_activity") else "document"
             return "document"
+
+    def _get_job_status(self, job_id: str) -> str or None:
+        """
+        Quickly check job status via BigPanDA API to determine routing.
+
+        Args:
+            job_id: The PanDA job ID
+
+        Returns:
+            str: Job status (e.g., 'failed', 'finished', 'running') or None if error
+        """
+        try:
+            url = f"https://bigpanda.cern.ch/jobs/?pandaid={job_id}&json&mode=nodrop"
+            response = requests.get(url, timeout=10)
+            if response.ok:
+                data = response.json()
+                if data and 'jobs' in data and len(data['jobs']) > 0:
+                    job_status = data['jobs'][0].get('jobstatus', 'unknown')
+                    logger.info(f"Job {job_id} status from API: {job_status}")
+                    return job_status
+            logger.warning(f"Failed to get job status for {job_id}: HTTP {response.status_code}")
+            return None
+        except Exception as e:
+            logger.warning(f"Error checking job status for {job_id}: {e}")
+            return None
 
     def answer(self, question: str) -> str:
         return self.classify_question(question)

@@ -10,8 +10,8 @@ echo "1. Checking if containers are running..."
 docker compose ps
 echo
 
-echo "2. Testing Ask-PanDA server (port 8001)..."
-curl -f http://localhost:8001/docs > /dev/null 2>&1 && \
+echo "2. Testing Ask-PanDA server (port 8000)..."
+curl -f http://localhost:8000/docs > /dev/null 2>&1 && \
     echo "✓ Ask-PanDA server is accessible" || \
     echo "✗ Ask-PanDA server is not accessible"
 echo
@@ -29,8 +29,8 @@ curl -s http://localhost:11435/api/tags | python3 -m json.tool 2>/dev/null && \
 echo
 
 echo "5. Checking Docker network..."
-docker network inspect ask-panda-network > /dev/null 2>&1 && \
-    echo "✓ Docker network 'ask-panda-network' exists" || \
+docker network inspect ask-panda_ask-panda-network > /dev/null 2>&1 && \
+    echo "✓ Docker network 'ask-panda_ask-panda-network' exists" || \
     echo "✗ Docker network not found"
 echo
 

@@ -101,6 +101,7 @@ class LogAnalysisAgent:
                 sys.exit(1)
 
         self.session_id = session_id  # Session ID for tracking conversation
+        self.log_excerpt_file = None  # Path to extracted log file for including in response
 
     def ask(self, question: str) -> str:
         """
@@ -185,7 +186,35 @@ class LogAnalysisAgent:
             memory.store_turn(self.session_id, "Investigate the job failure", formatted_answer)
             logger.info(f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={formatted_answer}")
 
-        return formatted_answer
+        # Read log excerpts if available
+        log_excerpts = None
+        logger.info(f"Checking for log excerpt file: {self.log_excerpt_file}")
+        if self.log_excerpt_file:
+            logger.info(f"Log excerpt file path exists in instance variable")
+            if os.path.exists(self.log_excerpt_file):
+                logger.info(f"Log excerpt file exists on disk: {self.log_excerpt_file}")
+                try:
+                    with open(self.log_excerpt_file, 'r', encoding='utf-8') as f:
+                        log_content = f.read()
+                        # Limit to last 50 lines for readability
+                        log_lines = log_content.split('\n')
+                        if len(log_lines) > 50:
+                            log_excerpts = '\n'.join(log_lines[-50:])
+                        else:
+                            log_excerpts = log_content
+                        logger.info(f"Included {len(log_lines)} lines from log excerpt file")
+                except Exception as e:
+                    logger.warning(f"Failed to read log excerpt file {self.log_excerpt_file}: {e}")
+            else:
+                logger.warning(f"Log excerpt file does not exist: {self.log_excerpt_file}")
+        else:
+            logger.warning("No log excerpt file path set in instance variable")
+
+        # Return dict with both answer and log excerpts
+        return {
+            "answer": formatted_answer,
+            "log_excerpts": log_excerpts
+        }
 
     # async def fetch_all_data(self, log_file: str) -> tuple[int, dict or None, dict or None]:
 
@@ -508,6 +537,7 @@ Here's the error description:
                 logger.warning(f"Error: Log file {log_file} not found in the fetched files.")
                 sys.exit(1)
             output_file = f"{self.pandaid}-{log_file}_extracted.txt"
+            self.log_excerpt_file = output_file  # Store for later inclusion in response
             log_file_path = file_dictionary.get(log_file) if file_dictionary else None
             if log_file_path:
                 # Create an output file for the log extracts

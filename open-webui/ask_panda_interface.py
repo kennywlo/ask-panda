@@ -199,10 +199,15 @@ class Pipe:
         #                         "session_id": self.session_id,
         #                         "question": question,
         #                         "model": self.model,
-        #                         "answer": answer
+        #                         "answer": answer,
+        #                         "log_excerpts": log_excerpts  # NEW: may contain log file excerpts
         #                     }
         if isinstance(answer, dict):
             final_answer = answer.get("answer", "No answer provided")
+            # If log excerpts are available, append them to the answer
+            log_excerpts = answer.get("log_excerpts")
+            if log_excerpts:
+                final_answer += "\n\n---\n\n**Log Excerpts:**\n```\n" + log_excerpts + "\n```"
         else:
             final_answer = answer
 

@@ -680,10 +680,14 @@ async def agent_ask(request: QuestionRequest) -> dict[str, str]:
 
         if isinstance(answer, dict):
             final_answer = answer.get("answer", "No answer provided")
+            # Preserve additional fields like log_excerpts
+            response = {"answer": final_answer, "category": routed_category}
+            for key in answer:
+                if key != "answer":  # Don't duplicate the answer field
+                    response[key] = answer[key]
+            return response
         else:
-            final_answer = answer
-
-        return {"answer": final_answer, "category": routed_category}
+            return {"answer": answer, "category": routed_category}
     except Exception as e:
         logger.error(f"Agent error: {e}")
         return {"answer": f"Error: {str(e)}", "category": "error"}
