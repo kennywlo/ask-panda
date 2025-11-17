@@ -92,7 +92,7 @@ class DocumentQueryAgent:
                 answer = await self._query_via_http(prompt)
 
             if answer.startswith("Error:"):
-                logger.info(answer, file=sys.stderr)
+                logger.error(answer)
                 return ""
 
             if self.session_id != "None":

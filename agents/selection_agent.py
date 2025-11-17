@@ -80,6 +80,45 @@ class SelectionAgent:
         # Extract the last user message from conversation history for cleaner classification
         clean_question = _extract_last_user_message(question)
 
+        # REGEX PRE-FILTER: Catch obvious task/job IDs before LLM (prevents non-deterministic misclassification)
+        # Pattern: "task/job/about/status/show/tell [me] [about] <5+ digit number>"
+        task_pattern = r'\b(?:task|job|about|status|show|tell|panda\s*(?:task|job)?|info)\s+(?:me\s+)?(?:about\s+)?(\d{5,})\b'
+        bare_number_pattern = r'^\s*(?:just\s+)?(?:a\s+)?(?:number\s*:?\s*)?(\d{7,})\s*\??$'  # Bare numbers (7+ digits to avoid false positives)
+
+        # Check for task/job ID patterns
+        task_match = re.search(task_pattern, clean_question.lower())
+        bare_match = re.search(bare_number_pattern, clean_question.lower())
+
+        if task_match or bare_match:
+            matched_id = int(task_match.group(1) if task_match else bare_match.group(1))
+
+            # Determine if it's a log request or task status query
+            is_log_request = any(keyword in clean_question.lower() for keyword in
+                                ['fail', 'crash', 'error', 'why', 'log', 'what happened', 'what caused'])
+
+            if is_log_request:
+                logger.info(f"Regex pre-filter: detected job ID {matched_id} with failure/log keywords -> log_analyzer")
+                # Create log analyzer agent if not exists
+                if not self.agents.get("log_analyzer"):
+                    self.agents["log_analyzer"] = LogAnalysisAgent(
+                        pandaid=str(matched_id),
+                        model=self.model,
+                        session_id=self.session_id,
+                        cache=self.cache
+                    )
+                return "log_analyzer"
+            else:
+                logger.info(f"Regex pre-filter: detected task ID {matched_id} -> task")
+                # Create task agent if not exists
+                if not self.agents.get("task"):
+                    self.agents["task"] = TaskStatusAgent(
+                        taskid=str(matched_id),
+                        model=self.model,
+                        session_id=self.session_id,
+                        cache=self.cache
+                    )
+                return "task"
+
         # Use LLM with structured output for intelligent classification + entity extraction
         prompt = f"""Analyze this question and return ONLY a valid JSON object with entity extraction and classification.
 
