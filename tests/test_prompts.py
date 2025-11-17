@@ -43,7 +43,7 @@ for num, prompt in prompts.items():
         response = requests.post(
             f"{BASE_URL}/agent_ask",
             json={"question": prompt, "model": MODEL},
-            timeout=30
+            timeout=120
         )
 
         if response.status_code == 200:
