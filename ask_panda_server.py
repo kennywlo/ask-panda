@@ -554,7 +554,7 @@ class PandaMCP(FastMCP):
 
         # Construct prompt explicitly with system identity
         system_identity = "You are AskPanDA, an intelligent assistant for the PanDA (Production and Distributed Analysis) workload management system. You help users with questions about PanDA documentation, task status, and job failures."
-        prompt = f"{system_identity}\n\nAnswer based on the following context:\n{context}\n\nQuestion: {question}"
+        prompt = f"{system_identity}\n\nUse the following context to answer technical questions when relevant. For greetings or conversational questions, respond naturally as AskPanDA.\n\nContext:\n{context}\n\nQuestion: {question}"
 
         return await self._dispatch_with_failover(prompt, model)
 

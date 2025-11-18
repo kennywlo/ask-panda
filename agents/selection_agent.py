@@ -373,7 +373,27 @@ Return ONLY the JSON object, nothing else.
                 gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
                 response = gemini_model.generate_content(question)
                 _answer = response.text
-            elif self.model in {"auto", "mistral", "llama", "gpt-oss:20b"}:
+            elif self.model == "auto":
+                # For auto mode, implement direct failover to avoid HTTP issues
+                # Try models in priority order: gemini -> mistral -> gpt-oss:20b
+                _answer = None
+                last_error = None
+
+                # Try Gemini first
+                if GEMINI_API_KEY:
+                    try:
+                        gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
+                        response = gemini_model.generate_content(question)
+                        _answer = response.text
+                        logger.info("Successfully used Gemini for classification")
+                    except Exception as e:
+                        last_error = f"Gemini failed: {e}"
+                        logger.warning(last_error)
+
+                # If Gemini failed, try the HTTP failover for other models
+                if not _answer:
+                    _answer = call_model_with_failover(self.model, question)
+            elif self.model in {"mistral", "llama", "gpt-oss:20b"}:
                 _answer = call_model_with_failover(self.model, question)
             else:
                 # For other models, fall back to HTTP (but this creates deadlock risk)
