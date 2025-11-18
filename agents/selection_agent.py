@@ -85,8 +85,8 @@ class SelectionAgent:
         clean_question = _extract_last_user_message(question)
 
         # REGEX PRE-FILTER: Catch obvious task/job IDs before LLM (prevents non-deterministic misclassification)
-        # Pattern: "task/job/about/status/show/tell [me] [about] <5+ digit number>"
-        task_pattern = r'\b(?:task|job|about|status|show|tell|panda\s*(?:task|job)?|info)\s+(?:me\s+)?(?:about\s+)?(\d{5,})\b'
+        # Pattern: "task/job/about/status/show/tell/what [me] [about] <5+ digit number>"
+        task_pattern = r'\b(?:task|job|about|status|show|tell|what|panda\s*(?:task|job)?|info)\s+(?:me\s+)?(?:about\s+)?(?:happened\s+)?(?:with\s+)?(\d{5,})\b'
         bare_number_pattern = r'^\s*(?:just\s+)?(?:a\s+)?(?:number\s*:?\s*)?(\d{7,})\s*\??$'  # Bare numbers (7+ digits to avoid false positives)
 
         # Check for task/job ID patterns
@@ -97,8 +97,9 @@ class SelectionAgent:
             matched_id = int(task_match.group(1) if task_match else bare_match.group(1))
 
             # Determine if it's a log request or task status query
+            # More strict: only treat as log_analyzer if asking about failure/crash/error (not generic "what happened")
             is_log_request = any(keyword in clean_question.lower() for keyword in
-                                ['fail', 'crash', 'error', 'why', 'log', 'what happened', 'what caused'])
+                                ['fail', 'crash', 'error', 'why did', 'what caused', 'log', 'debug'])
 
             if is_log_request:
                 logger.info(f"Regex pre-filter: detected job ID {matched_id} with failure/log keywords -> log_analyzer")
