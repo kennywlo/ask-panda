@@ -18,6 +18,10 @@
 # Authors:
 # - Paul Nilsson, paul.nilsson@cern.ch, 2025
 
+# Load environment variables from .env file before any other imports
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import asyncio
 import google.generativeai as genai

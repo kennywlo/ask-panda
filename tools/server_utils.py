@@ -20,6 +20,10 @@
 
 """Utility functions for server management."""
 
+# Load environment variables from .env file before any other code
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 import os
 import requests

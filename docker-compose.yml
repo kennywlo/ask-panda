@@ -30,15 +30,9 @@ services:
       - ./chromadb:/app/chromadb
       - ./resources:/app/resources
     environment:
-      # Add your API keys here or use .env file
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
-      - LLAMA_API_URL=${LLAMA_API_URL:-http://ollama-shim:11434/api/generate}
-      - INTERNAL_API_URL=http://ask-panda:8000/rag_ask
-      - MCP_SERVER_URL=http://localhost:8000
-      - ASK_PANDA_MODEL_PRIORITY=${ASK_PANDA_MODEL_PRIORITY:-mistral,gpt-oss:20b}
+      # Environment variables are now loaded from .env via load_dotenv()
+      # Keep only Docker-specific networking overrides
+      - MCP_SERVER_URL=http://ask-panda:8000
     networks:
       - ask-panda-network
     restart: unless-stopped

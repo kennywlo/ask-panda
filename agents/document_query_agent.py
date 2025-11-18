@@ -20,6 +20,10 @@
 
 """This script is a simple command-line agent that interacts with a RAG (Retrieval-Augmented Generation) server."""
 
+# Load environment variables from .env file before any other imports
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import asyncio
 import logging

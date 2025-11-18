@@ -31,6 +31,10 @@ vector store for context retrieval, and defines a PandaMCP class to handle
 the RAG logic and interaction with the different LLMs.
 """
 
+# Load environment variables from .env file before any other imports
+from dotenv import load_dotenv
+load_dotenv()
+
 # Set up basic logging configuration at the top of your file
 import logging
 logging.basicConfig(

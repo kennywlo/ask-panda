@@ -42,6 +42,11 @@ Question ====> CRICanalysisClient -------> SQL query  ======> execute SQL ======
 Rui XUE, r.xue@cern.ch
 Oct, 2025
 '''
+
+# Load environment variables from .env file before any other imports
+from dotenv import load_dotenv
+load_dotenv()
+
 import sys
 import sqlite3
 import os

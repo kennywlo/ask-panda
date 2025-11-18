@@ -20,6 +20,10 @@
 
 """This agent can download task metadata from PanDA and ask an LLM to analyze the relevant parts."""
 
+# Load environment variables from .env file before any other imports
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import ast
 import json
