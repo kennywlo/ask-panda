@@ -392,14 +392,15 @@ class TaskStatus:
             if not answer:
                 err = "No answer returned from the LLM."
                 logger.error(f"{err}")
-                return 'error: {err}'
+                return f'error: {err}'
 
             # Strip code block formatting
             try:
                 clean_code = re.sub(r"^```(?:python)?\n|\n```$", "", answer.strip())
             except re.error as e:
-                logger.error(f"Regex error while cleaning code: {e}")
-                return 'error: {err}'
+                err = f"Regex error while cleaning code: {e}"
+                logger.error(err)
+                return f'error: {err}'
 
             # convert the answer to a Python dictionary
             try:
@@ -407,12 +408,12 @@ class TaskStatus:
             except (SyntaxError, ValueError) as e:
                 err = f"Error converting answer to dictionary: {e}"
                 logger.error(f"{err}")
-                return 'error: {err}'
+                return f'error: {err}'
 
             if not answer_dict:
                 err = "Failed to store the answer as a Python dictionary."
                 logger.error(f"{err}")
-                return 'error: {err}'
+                return f'error: {err}'
 
             # format the answer for better readability
             formatted_answer = format_answer(answer_dict)

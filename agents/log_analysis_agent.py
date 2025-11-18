@@ -121,12 +121,23 @@ class LogAnalysisAgent:
 
         def extract_python_literal(s: str) -> str:
             # strip fences if present
-            m = re.search(r"```(?:python)?\s*(\{.*\})\s*```", s, flags=re.S)
+            m = re.search(r"```(?:python|json)?\s*(\{.*\})\s*```", s, flags=re.S)
             return m.group(1) if m else s.strip()
 
         def parse_answer_to_dict(raw: str) -> dict:
             payload = extract_python_literal(raw)
-            return ast.literal_eval(payload)  # works with triple-quoted strings
+            # Try Python literal first (handles triple-quoted strings)
+            try:
+                return ast.literal_eval(payload)
+            except (SyntaxError, ValueError) as e:
+                # Fallback to JSON parsing (more forgiving)
+                logger.warning(f"ast.literal_eval failed ({e}), trying JSON parse...")
+                import json
+                try:
+                    return json.loads(payload)
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"JSON parse also failed: {json_err}")
+                    raise ValueError(f"Could not parse as Python dict or JSON: {e}")
 
         # Call the selected LLM directly to avoid HTTP deadlock
         try:
@@ -134,7 +145,27 @@ class LogAnalysisAgent:
                 gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
                 response = gemini_model.generate_content(question)
                 answer = response.text
-            elif self.model in {"auto", "mistral", "llama", "gpt-oss:20b"}:
+            elif self.model == "auto":
+                # For auto mode, implement direct failover to avoid HTTP issues
+                # Try models in priority order: gemini -> mistral -> gpt-oss:20b
+                answer = None
+                last_error = None
+
+                # Try Gemini first
+                if GEMINI_API_KEY:
+                    try:
+                        gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
+                        response = gemini_model.generate_content(question)
+                        answer = response.text
+                        logger.info("Successfully used Gemini for log analysis")
+                    except Exception as e:
+                        last_error = f"Gemini failed: {e}"
+                        logger.warning(last_error)
+
+                # If Gemini failed, try the HTTP failover for other models
+                if not answer:
+                    answer = call_model_with_failover(self.model, question)
+            elif self.model in {"mistral", "llama", "gpt-oss:20b"}:
                 answer = call_model_with_failover(self.model, question)
             else:
                 # For other models, fall back to HTTP (but this creates deadlock risk)
@@ -181,7 +212,12 @@ class LogAnalysisAgent:
         formatted_answer = format_answer(answer_dict)
         if not formatted_answer:
             logger.error(f"Failed to format the answer from the LLM using: {answer_dict}")
-            return f"error: Failed to format answer"
+            # Return the raw dictionary in a readable format as fallback
+            import json
+            try:
+                return f"**Answer** (raw format):\n\n```json\n{json.dumps(answer_dict, indent=2)}\n```"
+            except Exception:
+                return f"**Answer** (raw format):\n\n{answer_dict}"
 
         logger.info(f"Answer from {self.model.capitalize()}:\n{formatted_answer}")
 

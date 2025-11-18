@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Test script for 19 AskPanDA prompts."""
+"""Test script for 19 AskPanDA prompts.
+
+Expected runtime: ~6-8 minutes (avg 20 seconds per query with gpt-oss:20b)
+"""
 
 import requests
 import json
+import time
+import sys
 
 BASE_URL = "http://localhost:8000"
-MODEL = "auto"  # Using 'auto' to test fallback functionality (fallsback from mistral to gpt-oss:20b)
+MODEL = "auto"  # Using 'auto' to test model priority (currently: gpt-oss:20b → mistral)
 
 prompts = {
     # DOCUMENT QUERIES (7)
@@ -36,15 +41,29 @@ prompts = {
     19: "Is task 47250094 finished?",
 }
 
+print("="*80)
+print("ASKPANDA REGRESSION TEST")
+print("="*80)
+print(f"Testing {len(prompts)} prompts against {BASE_URL}")
+print(f"Model: {MODEL}")
+print(f"Timeout: 60 seconds per query")
+print("="*80 + "\n")
+
 results = {}
+start_time = time.time()
 
 for num, prompt in prompts.items():
+    # Progress indicator
+    print(f"[{num}/19] Testing: {prompt[:60]}{'...' if len(prompt) > 60 else ''}", end=" ", flush=True)
+    query_start = time.time()
+
     try:
         response = requests.post(
             f"{BASE_URL}/agent_ask",
             json={"question": prompt, "model": MODEL},
-            timeout=120
+            timeout=60
         )
+        query_time = time.time() - query_start
 
         if response.status_code == 200:
             data = response.json()
@@ -53,22 +72,29 @@ for num, prompt in prompts.items():
                 "status": "✓ SUCCESS",
                 "answer": data.get("answer", "")[:200] + ("..." if len(data.get("answer", "")) > 200 else ""),
                 "category": data.get("category", "unknown"),
+                "query_time": query_time,
                 "full_response": data
             }
+            print(f"✓ ({query_time:.1f}s)")
         else:
             results[num] = {
                 "prompt": prompt,
                 "status": f"✗ HTTP {response.status_code}",
                 "error": response.text[:200],
+                "query_time": query_time,
                 "full_response": response.text
             }
+            print(f"✗ HTTP {response.status_code} ({query_time:.1f}s)")
     except Exception as e:
+        query_time = time.time() - query_start
         results[num] = {
             "prompt": prompt,
             "status": f"✗ ERROR",
             "error": str(e)[:200],
+            "query_time": query_time,
             "full_response": str(e)
         }
+        print(f"✗ ERROR ({query_time:.1f}s)")
 
 # Print results
 print("\n" + "="*80)
@@ -99,12 +125,20 @@ for category_name, prompt_range in categories.items():
                 print(f"   Error: {result['error']}")
 
 # Summary
+total_time = time.time() - start_time
 print("\n" + "="*80)
 print("SUMMARY")
 print("="*80)
 success_count = sum(1 for r in results.values() if r["status"].startswith("✓"))
 print(f"Passed: {success_count}/19")
 print(f"Failed: {19 - success_count}/19")
+print(f"\nTiming:")
+print(f"  Total runtime: {total_time:.1f}s ({total_time/60:.1f} minutes)")
+if results:
+    query_times = [r.get("query_time", 0) for r in results.values()]
+    print(f"  Average query time: {sum(query_times)/len(query_times):.1f}s")
+    print(f"  Min query time: {min(query_times):.1f}s")
+    print(f"  Max query time: {max(query_times):.1f}s")
 
 # Save detailed results to JSON
 with open("/tmp/askpanda_test_results.json", "w") as f:

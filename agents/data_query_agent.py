@@ -142,7 +142,27 @@ class TaskStatusAgent:
                 gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
                 response = gemini_model.generate_content(question)
                 answer = response.text
-            elif self.model in {"auto", "mistral", "llama", "gpt-oss:20b"}:
+            elif self.model == "auto":
+                # For auto mode, implement direct failover to avoid HTTP issues
+                # Try models in priority order: gemini -> mistral -> gpt-oss:20b
+                answer = None
+                last_error = None
+
+                # Try Gemini first
+                if GEMINI_API_KEY:
+                    try:
+                        gemini_model = genai.GenerativeModel("models/gemini-2.0-flash")
+                        response = gemini_model.generate_content(question)
+                        answer = response.text
+                        logger.info("Successfully used Gemini for data query")
+                    except Exception as e:
+                        last_error = f"Gemini failed: {e}"
+                        logger.warning(last_error)
+
+                # If Gemini failed, try the HTTP failover for other models
+                if not answer:
+                    answer = call_model_with_failover(self.model, question)
+            elif self.model in {"mistral", "llama", "gpt-oss:20b"}:
                 answer = call_model_with_failover(self.model, question)
             else:
                 # For other models, fall back to HTTP (but this creates deadlock risk)
@@ -159,7 +179,7 @@ class TaskStatusAgent:
         if not answer:
             err = "No answer returned from the LLM."
             logger.error(f"{err}")
-            return 'error: {err}'
+            return f'error: {err}'
 
         if answer.lower().startswith("error:"):
             logger.error(answer)
@@ -169,8 +189,9 @@ class TaskStatusAgent:
         try:
             clean_code = re.sub(r"^```(?:python)?\n|\n```$", "", answer.strip())
         except re.error as e:
-            logger.error(f"Regex error while cleaning code: {e}")
-            return 'error: {err}'
+            err = f"Regex error while cleaning code: {e}"
+            logger.error(err)
+            return f'error: {err}'
 
         # convert the answer to a Python dictionary
         try:
@@ -178,12 +199,12 @@ class TaskStatusAgent:
         except (SyntaxError, ValueError) as e:
             err = f"Error converting answer to dictionary: {e}"
             logger.error(f"{err}")
-            return 'error: {err}'
+            return f'error: {err}'
 
         if not answer_dict:
             err = "Failed to store the answer as a Python dictionary."
             logger.error(f"{err}")
-            return 'error: {err}'
+            return f'error: {err}'
 
         # format the answer for better readability
         formatted_answer = format_answer(answer_dict)
