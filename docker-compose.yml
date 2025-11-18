@@ -29,9 +29,10 @@ services:
       - ./cache:/app/cache
       - ./chromadb:/app/chromadb
       - ./resources:/app/resources
+    env_file:
+      - .env
     environment:
-      # Environment variables are now loaded from .env via load_dotenv()
-      # Keep only Docker-specific networking overrides
+      # Docker-specific networking overrides
       - MCP_SERVER_URL=http://ask-panda:8000
     networks:
       - ask-panda-network
