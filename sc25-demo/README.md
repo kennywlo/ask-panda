@@ -162,6 +162,65 @@ time curl -sX POST "http://localhost:8000/agent_ask" \
 echo -e "\n=== All checks complete ==="
 ```
 
+## CRIC Integration: Operational Query Agent
+
+Ask-PanDA includes intelligent **CRIC (Computing Resource Information Catalogue)** integration for answering operational questions about PanDA sites, queues, and computing resources.
+
+### How CRIC Works
+
+The CRIC agent uses a sophisticated **LLM+SQL** pipeline:
+
+1. **Smart Classification**: Questions are classified to determine if CRIC database is needed
+   - Yes: "Which sites use rucio?", "What is the state of Tier-1 resources?"
+   - No: "What is PanDA?" (documentation query instead)
+
+2. **Semantic Field Matching**: LLM identifies relevant database columns using context understanding
+   - Extracts keywords from the question
+   - Matches against 20+ available fields (site, tier, copytools, capacity, etc.)
+
+3. **LLM SQL Generation**: LLM generates SQL SELECT queries based on identified fields
+
+4. **SQL Validation**: SQLcritic agent validates queries for:
+   - Safety (only SELECT, no modifications)
+   - Correctness (field types match operators)
+   - Consistency (schema validation via vector DB)
+
+5. **Database Query Execution**: Executes validated queries against SQLite CRIC database
+   - 227 site/queue records in `resources/queuedata.db`
+   - Includes complex JSON fields (copytools, params, queue configurations)
+
+6. **Answer Synthesis**: LLM generates human-readable answers from query results
+
+### Example CRIC Queries
+
+```
+- "Which sites use the rucio copytool?"
+- "List all Tier-1 sites by country"
+- "What is the current state of resources in Europe?"
+- "Which queues have Harvester enabled?"
+- "Show me sites with >100 cores available"
+```
+
+### Safety Features
+
+- ✅ **Query Validation**: Only SELECT queries permitted (no INSERT/UPDATE/DELETE)
+- ✅ **Schema Safety**: Vector database ensures fields exist before execution
+- ✅ **Type Checking**: SQLcritic validates operators match field data types
+- ✅ **Iterative Refinement**: LLM discussion loop for complex queries (max 3 rounds)
+- ✅ **Context Limits**: Automatic truncation at 20K characters to prevent token overflow
+
+### Technical Components
+
+- `clients/CRICanalysis.py` - Main CRIC agent (439 lines)
+- `clients/SQLcritic.py` - SQL validation and safety layer (218 lines)
+- `resources/queuedata.db` - SQLite database with CRIC data (1.7 MB)
+- `resources/cric_schema.txt` - Database schema documentation (94 lines)
+- `tools/txt2vecdb.py` - Vector database generator for schema matching
+
+### Demo Talking Point
+
+"If someone asks about queue configurations or resource availability, AskPanDA automatically routes the question to our CRIC agent, which intelligently identifies relevant database fields, generates and validates SQL queries, and synthesizes human-readable answers—all with built-in safety checks to prevent SQL injection."
+
 ## Talking Points
 
 ### Technical Highlights
@@ -170,6 +229,8 @@ echo -e "\n=== All checks complete ==="
 - **RAG System**: ChromaDB vector store with 5 indexed documents
 - **Live Data Integration**: Real-time task metadata from BigPanda
 - **Log Analysis**: Automated download and analysis of job failure logs with expert/non-expert guidance
+- **CRIC Database Agent**: LLM+SQL pipeline for intelligent operational queries about sites and resources
+- **Model Fallback Chain**: Automatic failover from Mistral to gpt-oss:20b with <20ms switchover latency
 - **Direct API Integration**: Mistral SDK calls to avoid HTTP deadlock issues
 - **Open WebUI Compatible**: Ollama shim for easy integration
 
