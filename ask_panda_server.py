@@ -326,7 +326,7 @@ class PandaMCP(FastMCP):
             return f"Error interacting with Anthropic API: {e}"
         except Exception as e:
             # Catch any other unexpected errors
-            return f"An unexpected error occurred with Anthropic API: {e}"
+            return f"Error: Unexpected error with Anthropic API: {e}"
 
     async def _call_openai(self, prompt: str) -> str:
         """
@@ -372,7 +372,7 @@ class PandaMCP(FastMCP):
         except openai.APIError as e:  # Base error for other API related issues
             return f"Error interacting with OpenAI API: {e}"
         except Exception as e:
-            return f"An unexpected error occurred with OpenAI API: {e}"
+            return f"Error: Unexpected error with OpenAI API: {e}"
 
     async def _call_llama(self, prompt: str, model_override: Optional[str] = None) -> str:
         """
@@ -421,7 +421,7 @@ class PandaMCP(FastMCP):
         except (
             Exception
         ) as e:  # Catch-all for other errors, e.g. JSONDecodeError if response.json() fails
-            return f"An unexpected error occurred with LLaMA API: {e}"
+            return f"Error: Unexpected error with LLaMA API: {e}"
 
     async def _call_gemini(self, prompt: str) -> str:
         """
@@ -477,7 +477,7 @@ class PandaMCP(FastMCP):
             )
             if google_api_error and isinstance(e, google_api_error):
                 return f"Error interacting with Gemini API: Google API error - {e}"
-            return f"An unexpected error occurred with Gemini API: {e}"
+            return f"Error: Unexpected error with Gemini API: {e}"
 
     def _resolve_model_sequence(self, requested_model: str) -> list[str]:
         model = (requested_model or "").lower().strip()
