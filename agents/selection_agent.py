@@ -98,8 +98,20 @@ class SelectionAgent:
 
             # Determine if it's a log request or task status query
             # More strict: only treat as log_analyzer if asking about failure/crash/error (not generic "what happened")
-            is_log_request = any(keyword in clean_question.lower() for keyword in
-                                ['fail', 'crash', 'error', 'why did', 'what caused', 'log', 'debug'])
+            # IMPORTANT: Avoid classifying as log_analyzer if asking about multiple jobs in a task
+            # e.g., "how many jobs failed in task X" should be task status, not log analysis
+            log_keywords = ['why did', 'what caused', 'log', 'debug', 'crash', 'error']
+            fail_context_keywords = ['how many', 'count', 'show me', 'list', 'in task', 'in the task']
+
+            has_fail_keyword = 'fail' in clean_question.lower()
+            has_log_keywords = any(keyword in clean_question.lower() for keyword in log_keywords)
+            has_fail_context = any(keyword in clean_question.lower() for keyword in fail_context_keywords)
+
+            # Only treat as log_analyzer if:
+            # 1. Has explicit log/debug/crash keywords OR
+            # 2. Has "why did" or "what caused" (failure analysis) OR
+            # 3. Has "fail" BUT no context keywords that suggest task-level query
+            is_log_request = has_log_keywords or (has_fail_keyword and not has_fail_context)
 
             if is_log_request:
                 logger.info(f"Regex pre-filter: detected job ID {matched_id} with failure/log keywords -> log_analyzer")

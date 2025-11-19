@@ -649,7 +649,7 @@ async def llm_ask(request: QuestionRequest) -> dict[str, str]:
 
 
 @app.post("/agent_ask")
-async def agent_ask(request: QuestionRequest) -> dict[str, str]:
+async def agent_ask(request: QuestionRequest) -> dict:
     """
     Full agent routing endpoint - routes questions to specialized agents.
     """

@@ -227,7 +227,7 @@ class LogAnalysisAgent:
             logger.info(f"Answer stored in session ID {self.session_id}:\n\nquestion={question}\n\nanswer={formatted_answer}")
 
         # Read log excerpts if available
-        log_excerpts = None
+        log_excerpts = ""
         logger.info(f"Checking for log excerpt file: {self.log_excerpt_file}")
         if self.log_excerpt_file:
             logger.info(f"Log excerpt file path exists in instance variable")
