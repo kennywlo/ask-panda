@@ -68,12 +68,12 @@ services:
     restart: unless-stopped
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.6.36
+    image: ghcr.io/open-webui/open-webui:latest
     container_name: ask-panda-webui
     command: >
       bash -c "
-        export PYTHONPATH=/app/backend
-        python /ask-panda/scripts/install_open_webui_function.py &
+        export PYTHONPATH=/app/backend &&
+        python /ask-panda/scripts/install_open_webui_function.py &&
         exec bash start.sh
       "
     ports:
